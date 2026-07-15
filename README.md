@@ -276,6 +276,7 @@ UI در این حالت فایل عمومی یا PDF را attached وانمود 
 
 ## مجوزها و داده‌ها
 
-Fontsource بسته‌های Vazirmatn، Inter و JetBrains Mono را همراه license upstream
+کد این پروژه تحت [MIT License](LICENSE) منتشر شده است. Fontsource بسته‌های
+Vazirmatn، Inter و JetBrains Mono را همراه license upstream
 نصب می‌کند. transcript و artifact از Hermes می‌آیند؛ UI فقط preferenceهای
 غیرحساس مانند theme و locale را در مرورگر نگه می‌دارد.

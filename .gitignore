@@ -4,9 +4,10 @@ dist-server/
 coverage/
 playwright-report/
 test-results/
-.env
-.env.local
-.env.*.local
+# Local environment files may contain Hermes credentials. Keep only the
+# documented template under version control.
+.env*
+!.env.example
 *.log
 *.tsbuildinfo
 .DS_Store
