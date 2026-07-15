@@ -1,7 +1,7 @@
 "use client";
 
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ArrowDown, Check, Copy, LoaderCircle, Sparkles, Square, Volume2 } from "lucide-react";
+import { ArrowDown, Check, Copy, LoaderCircle, Pencil, RefreshCw, Sparkles, Square, Volume2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { MarkdownRenderer } from "./markdown-renderer";
@@ -47,6 +47,9 @@ type TranscriptProps = {
     expired: string;
     secretPlaceholder: string;
     sudoPlaceholder: string;
+    edit: string;
+    saveEdit: string;
+    regenerate: string;
   };
   onPromptResponse: (
     prompt: InteractivePrompt,
@@ -55,6 +58,9 @@ type TranscriptProps = {
   onEmptyAction?: () => void;
   onSpeak?: (text: string) => Promise<SpeechPlayback>;
   onSpeechError?: (message: string) => void;
+  canRewind?: boolean;
+  onEditMessage?: (message: Extract<TranscriptItem, { kind: "message" }>["message"], text: string) => Promise<void>;
+  onRegenerate?: (message: Extract<TranscriptItem, { kind: "message" }>["message"]) => Promise<void>;
 };
 
 function formatTimestamp(value: string | undefined, locale: string): string | undefined {
@@ -75,6 +81,9 @@ export function Transcript({
   onEmptyAction,
   onSpeak,
   onSpeechError,
+  canRewind,
+  onEditMessage,
+  onRegenerate,
 }: TranscriptProps) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const followLatestRef = useRef(true);
@@ -247,6 +256,9 @@ export function Transcript({
                       ttsEnabled={ttsEnabled}
                       onSpeak={onSpeak}
                       onSpeechError={onSpeechError}
+                      canRewind={canRewind}
+                      onEditMessage={onEditMessage}
+                      onRegenerate={onRegenerate}
                     />
                   ) : item.kind === "reasoning" ? (
                     <ReasoningDisclosure
@@ -351,6 +363,9 @@ function MessageBubble({
   ttsEnabled,
   onSpeak,
   onSpeechError,
+  canRewind,
+  onEditMessage,
+  onRegenerate,
 }: {
   message: Extract<TranscriptItem, { kind: "message" }>["message"];
   locale: string;
@@ -358,8 +373,14 @@ function MessageBubble({
   ttsEnabled?: boolean;
   onSpeak?: TranscriptProps["onSpeak"];
   onSpeechError?: TranscriptProps["onSpeechError"];
+  canRewind?: boolean;
+  onEditMessage?: TranscriptProps["onEditMessage"];
+  onRegenerate?: TranscriptProps["onRegenerate"];
 }) {
   const [copied, setCopied] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [editValue, setEditValue] = useState(message.rawSource);
+  const [editBusy, setEditBusy] = useState(false);
   const [speechState, setSpeechState] = useState<"idle" | "preparing" | "playing">("idle");
   const playbackRef = useRef<SpeechPlayback | null>(null);
   const roleLabel =
@@ -405,6 +426,18 @@ function MessageBubble({
     }
   }
 
+  async function submitEdit() {
+    const value = editValue.trim();
+    if (!value || !onEditMessage || editBusy) return;
+    setEditBusy(true);
+    try {
+      await onEditMessage(message, value);
+      setEditing(false);
+    } finally {
+      setEditBusy(false);
+    }
+  }
+
   return (
     <article
       className={`message message--${message.role} message--${message.status ?? "complete"}`}
@@ -427,16 +460,57 @@ function MessageBubble({
           <MarkdownRenderer source={message.reasoning} />
         </details>
       ) : null}
-      <div className="message__content">
-        <MarkdownRenderer
-          source={message.content}
-          isStreaming={message.status === "streaming"}
-          copyable={false}
-        />
-      </div>
+      {editing ? (
+        <div className="message-edit">
+          <textarea
+            value={editValue}
+            onChange={(event) => setEditValue(event.target.value)}
+            dir="auto"
+            autoFocus
+            disabled={editBusy}
+          />
+          <div className="message-edit__actions">
+            <button type="button" className="button button--ghost" onClick={() => setEditing(false)} disabled={editBusy}>
+              <X aria-hidden="true" size={15} />
+              {labels.cancel}
+            </button>
+            <button type="button" className="button button--primary" onClick={() => void submitEdit()} disabled={editBusy || !editValue.trim()}>
+              {editBusy ? <LoaderCircle aria-hidden="true" className="spin" size={15} /> : <Pencil aria-hidden="true" size={15} />}
+              {labels.saveEdit}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="message__content">
+          <MarkdownRenderer
+            source={message.content}
+            isStreaming={message.status === "streaming"}
+            copyable={false}
+          />
+        </div>
+      )}
       <footer className="message__footer">
         {message.status === "interrupted" ? (
           <span className="message__interrupted">{labels.interrupted}</span>
+        ) : null}
+        {canRewind && message.role === "user" && message.userOrdinal !== undefined && onEditMessage ? (
+          <button
+            type="button"
+            className="message-copy"
+            onClick={() => {
+              setEditValue(message.rawSource);
+              setEditing(true);
+            }}
+          >
+            <Pencil aria-hidden="true" size={15} />
+            {labels.edit}
+          </button>
+        ) : null}
+        {canRewind && message.role === "assistant" && message.status !== "streaming" && onRegenerate ? (
+          <button type="button" className="message-copy" onClick={() => void onRegenerate(message)}>
+            <RefreshCw aria-hidden="true" size={15} />
+            {labels.regenerate}
+          </button>
         ) : null}
         {ttsEnabled && onSpeak && message.role === "assistant" && message.status !== "streaming" && message.rawSource.trim() ? (
           <button

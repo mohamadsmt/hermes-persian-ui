@@ -75,6 +75,20 @@ describe("transcript state", () => {
     expect(tool?.kind === "tool" && tool.tool.output).toEqual({ success: false, error: "agent not found" });
   });
 
+  it("assigns ordinals only to authoritative user rows", () => {
+    const items = messagesToTranscript([
+      { id: "system", role: "system", content: "rules" },
+      { id: "u1", role: "user", content: "first" },
+      { id: "a1", role: "assistant", content: "answer" },
+      { id: "tool", role: "tool", content: "done", toolCallId: "call" },
+      { id: "u2", role: "user", content: "second" },
+    ]);
+    const messages = items.flatMap((item) => item.kind === "message" ? [item.message] : []);
+    expect(messages.find((message) => message.id === "system")?.userOrdinal).toBeUndefined();
+    expect(messages.find((message) => message.id === "u1")?.userOrdinal).toBe(0);
+    expect(messages.find((message) => message.id === "u2")?.userOrdinal).toBe(1);
+  });
+
   it("marks hydrated nonzero terminal exit codes as failed", () => {
     const items = messagesToTranscript([
       {

@@ -269,7 +269,7 @@ function timestampToIso(timestamp: number | undefined): string | undefined {
   return new Date(millis).toISOString();
 }
 
-function chatMessage(message: Message, content = message.content): ChatMessage {
+function chatMessage(message: Message, content = message.content, userOrdinal?: number): ChatMessage {
   return {
     id: message.id,
     role: message.role === "tool" ? "system" : message.role,
@@ -277,6 +277,7 @@ function chatMessage(message: Message, content = message.content): ChatMessage {
     rawSource: content,
     ...(timestampToIso(message.timestamp) ? { createdAt: timestampToIso(message.timestamp) } : {}),
     status: "complete",
+    ...(userOrdinal === undefined ? {} : { userOrdinal }),
   };
 }
 
@@ -296,6 +297,7 @@ function toolCalls(value: unknown): Array<{ id: string; name: string; input?: un
 /** Convert durable Hermes rows to the same ordered parts used by live gateway events. */
 export function messagesToTranscript(messages: Message[]): TranscriptItem[] {
   let items: TranscriptItem[] = [];
+  let userOrdinal = 0;
   for (const message of messages) {
     if (message.role === "assistant") {
       if (message.reasoning) {
@@ -335,7 +337,8 @@ export function messagesToTranscript(messages: Message[]): TranscriptItem[] {
       });
       continue;
     }
-    items = reduceTranscript(items, { type: "append-message", message: chatMessage(message) });
+    const ordinal = message.role === "user" ? userOrdinal++ : undefined;
+    items = reduceTranscript(items, { type: "append-message", message: chatMessage(message, message.content, ordinal) });
   }
   return items;
 }

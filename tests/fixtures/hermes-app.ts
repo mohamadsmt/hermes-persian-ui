@@ -43,6 +43,7 @@ export class HermesApp {
 
   async open(locale: "en" | "fa" = "fa"): Promise<void> {
     await this.page.goto(`/${locale}`);
+    await expect(this.page).toHaveTitle(/\S/u, { timeout: 15_000 });
     await expect(this.shell).toBeVisible();
     await expect(this.connectionStatus).toBeVisible();
     await expect(this.connectionStatus).toHaveText(/^(?:متصل|Connected)$/iu, {
@@ -89,8 +90,10 @@ export class HermesApp {
     await this.openSessionRail();
     const previousUrl = this.page.url();
     await this.page.getByTestId("new-session").click();
+    const dialogSubmit = this.page.getByTestId("create-session");
+    if (await dialogSubmit.isVisible()) await dialogSubmit.click();
     await expect.poll(() => this.page.url()).not.toBe(previousUrl);
-    await expect(this.page).toHaveURL(/\/(?:fa|en)\/c\/[^/?#]+/u);
+    await expect(this.page).toHaveURL(/\/(?:fa|en)\/c\/[^/?#]+\?profile=[^&#]+$/u);
   }
 
   async ensureSession(): Promise<void> {

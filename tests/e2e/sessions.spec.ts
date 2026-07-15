@@ -31,7 +31,7 @@ test("creates multiple sessions and resumes the first by its stable stored id", 
   );
   await expect(firstSession).toBeVisible();
   await firstSession.click();
-  await expect(page).toHaveURL(new RegExp(`/(?:fa|en)/c/${firstStoredId}$`, "u"));
+  await expect(page).toHaveURL(new RegExp(`/(?:fa|en)/c/${firstStoredId}\\?profile=default$`, "u"));
   await expect(app.messages("user").last()).toContainText("جلسهٔ اول");
 });
 
@@ -102,7 +102,7 @@ test("reasoning inherits Ultra and preserves a per-session High override", async
   await page.locator(
     `[data-testid="session-item"][data-session-id="${firstStoredId}"] .session-row__main`,
   ).click();
-  await expect(page).toHaveURL(new RegExp(`/(?:fa|en)/c/${firstStoredId}$`, "u"));
+  await expect(page).toHaveURL(new RegExp(`/(?:fa|en)/c/${firstStoredId}\\?profile=default$`, "u"));
   await expect(page.getByTestId("reasoning-picker")).toHaveValue("high");
 });
 
@@ -156,10 +156,10 @@ test("shows live usage and closes a runtime session without deleting its history
   await session.getByTestId("session-actions").click();
   await session.getByTestId("close-session").click();
   await page.getByTestId("confirm-close").click();
-  await expect(page).toHaveURL(/\/(?:fa|en)$/u);
+  await expect(page).toHaveURL(/\/(?:fa|en)\?profile=default$/u);
   await expect(session).toHaveCount(1);
 
   await session.locator(".session-row__main").click();
-  await expect(page).toHaveURL(new RegExp(`/(?:fa|en)/c/${storedId}$`, "u"));
+  await expect(page).toHaveURL(new RegExp(`/(?:fa|en)/c/${storedId}\\?profile=default$`, "u"));
   await expect(app.messages("user").last()).toContainText("برای مصرف یک پاسخ کوتاه بده");
 });

@@ -2109,3 +2109,196 @@ samp {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Modular workspace ------------------------------------------------------ */
+
+.workspace-shell {
+  display: grid;
+  min-block-size: 100dvh;
+  grid-template-columns: 5.5rem minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.workspace-nav {
+  z-index: 45;
+  display: flex;
+  min-block-size: 100dvh;
+  flex-direction: column;
+  gap: 0.35rem;
+  border-inline-end: 1px solid var(--border);
+  background: var(--sidebar);
+  padding: 0.75rem 0.5rem;
+}
+
+.workspace-nav__item {
+  display: flex;
+  min-block-size: 3.75rem;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  border-radius: 0.75rem;
+  color: var(--muted-foreground);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.workspace-nav__item:hover,
+.workspace-nav__item--active {
+  background: color-mix(in oklab, var(--primary) 11%, transparent);
+  color: var(--foreground);
+}
+
+.workspace-nav__item--active svg {
+  color: var(--primary);
+}
+
+.workspace-nav__item.workspace-nav__item--active > span {
+  color: var(--foreground);
+}
+
+.workspace-shell__body,
+.workspace-shell__chat,
+.workspace-shell__module {
+  min-inline-size: 0;
+  min-block-size: 0;
+  block-size: 100dvh;
+}
+
+.workspace-shell__module {
+  overflow: auto;
+}
+
+.message-edit {
+  display: grid;
+  gap: 0.625rem;
+  padding: 0.875rem;
+}
+
+.message-edit textarea {
+  min-block-size: 7rem;
+  resize: vertical;
+  border: 1px solid var(--input);
+  border-radius: 0.75rem;
+  background: var(--background);
+  padding: 0.75rem;
+  color: var(--foreground);
+  text-align: start;
+  unicode-bidi: plaintext;
+}
+
+.message-edit__actions,
+.recovery-modal__header,
+.recovery-modal__restore {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.625rem;
+}
+
+.recovery-modal {
+  inline-size: min(64rem, calc(100vw - 2rem));
+  max-inline-size: 64rem;
+}
+
+.recovery-modal__header h3 {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.recovery-modal__body {
+  display: grid;
+  min-block-size: 20rem;
+  grid-template-columns: minmax(13rem, 0.34fr) minmax(0, 1fr);
+  gap: 1rem;
+  margin-block: 1rem;
+}
+
+.recovery-checkpoints {
+  display: flex;
+  max-block-size: 26rem;
+  flex-direction: column;
+  gap: 0.5rem;
+  overflow: auto;
+}
+
+.recovery-checkpoint {
+  display: grid;
+  gap: 0.2rem;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: var(--surface);
+  padding: 0.625rem;
+  color: var(--foreground);
+  text-align: start;
+}
+
+.recovery-checkpoint--active {
+  border-color: var(--primary);
+  background: color-mix(in oklab, var(--primary) 8%, var(--surface));
+}
+
+.recovery-checkpoint time,
+.recovery-checkpoint bdi {
+  color: var(--muted-foreground);
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 0.7rem;
+}
+
+.recovery-preview {
+  min-inline-size: 0;
+}
+
+.recovery-preview pre {
+  max-block-size: 24rem;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: var(--background);
+  padding: 0.75rem;
+  font-size: 0.75rem;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 52rem) {
+  .workspace-shell {
+    display: block;
+    padding-block-end: 4.5rem;
+    overflow: visible;
+  }
+
+  .workspace-nav {
+    position: fixed;
+    inset-inline: 0;
+    inset-block-end: 0;
+    min-block-size: 0;
+    block-size: 4.5rem;
+    flex-direction: row;
+    justify-content: space-around;
+    border-block-start: 1px solid var(--border);
+    border-inline-end: 0;
+    padding: 0.35rem max(0.35rem, env(safe-area-inset-right)) max(0.35rem, env(safe-area-inset-bottom));
+  }
+
+  .workspace-nav__item {
+    min-block-size: 3.5rem;
+    flex: 1;
+  }
+
+  .workspace-shell__body,
+  .workspace-shell__chat,
+  .workspace-shell__module {
+    block-size: calc(100dvh - 4.5rem);
+  }
+
+  .workspace-shell__chat .app-shell,
+  .workspace-shell__chat .chat-main {
+    block-size: 100%;
+  }
+
+  .recovery-modal__body {
+    grid-template-columns: 1fr;
+  }
+}

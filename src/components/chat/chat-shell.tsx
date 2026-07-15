@@ -3,6 +3,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, RefreshCw, X } from "lucide-react";
 import { useLocale, useTranslations } from "next-intl";
+import { useRouter } from "next/navigation";
 import {
   useCallback,
   useEffect,
@@ -13,30 +14,40 @@ import {
 
 import {
   contentToText,
-  createHermesTransport,
   pendingPromptFromEvent,
   toolActivityFromEvent,
   type BootstrapInfo,
   type CapabilitySet,
+  type ContextBreakdown,
   type HermesEvent,
   type HermesTransport,
   type Message,
   type ModelOption,
   type PendingPrompt,
+  type ProjectTreePayload,
+  type RollbackCheckpoint,
+  type RollbackDiff,
   type SessionIdentity,
   type SessionSnapshot,
   type SessionSummary as HermesSessionSummary,
   type UsageStats,
+  type WorkspaceEntry,
 } from "@/lib/hermes";
 import { chatSessionScopeKey, useChatUiStore } from "@/store/chat-store";
+import { useHermesWorkspace } from "@/components/workspace/workspace-provider";
 
 import { ArtifactRail } from "./artifact-rail";
 import { ChatHeader } from "./chat-header";
 import { CommandPalette } from "./command-palette";
 import { Composer } from "./composer";
+import { NewSessionDialog, type NewSessionSubmission } from "./new-session-dialog";
 import type { PromptResponse } from "./prompt-card";
+import { ProjectSessionBrowser } from "./project-session-browser";
 import { SessionRail } from "./session-rail";
+import { RecoveryDialog } from "./recovery-dialog";
+import { SessionActionDialog } from "./session-action-dialog";
 import { Transcript } from "./transcript";
+import { WorkspaceFilesRail } from "./workspace-files-rail";
 import {
   classifyToolOutcome,
   messagesToTranscript,
@@ -58,6 +69,9 @@ import type {
 } from "./ui-types";
 
 type ChatShellProps = {
+  active?: boolean;
+  initialProfile?: string;
+  profileRequiredError?: boolean;
   storedSessionId?: string;
 };
 
@@ -94,6 +108,8 @@ function toSessionSummary(session: HermesSessionSummary, untitled: string): Sess
   return {
     storedId: session.id,
     title: session.title || untitled,
+    ...(session.preview ? { preview: session.preview } : {}),
+    ...(session.cwd ? { cwd: session.cwd } : {}),
     createdAt: timestampToIso(session.startedAt),
     updatedAt: timestampToIso(session.lastActive),
     messageCount: session.messageCount,
@@ -224,8 +240,14 @@ function artifactFromValue(value: unknown, toolId?: string): Artifact | null {
   };
 }
 
-export function ChatShell({ storedSessionId }: ChatShellProps) {
+export function ChatShell({
+  active = true,
+  initialProfile,
+  profileRequiredError = false,
+  storedSessionId,
+}: ChatShellProps) {
   const locale = useLocale();
+  const router = useRouter();
   const tApp = useTranslations("App");
   const tNav = useTranslations("Nav");
   const tSessions = useTranslations("Sessions");
@@ -242,10 +264,12 @@ export function ChatShell({ storedSessionId }: ChatShellProps) {
   const tCommands = useTranslations("Commands");
   const tErrors = useTranslations("Errors");
   const queryClient = useQueryClient();
-
-  const transportRef = useRef<HermesTransport | null>(null);
-  if (!transportRef.current) transportRef.current = createHermesTransport();
-  const transport = transportRef.current;
+  const {
+    publishRuntime,
+    recordActivityEvent,
+    setFeatureSupport,
+    transport,
+  } = useHermesWorkspace();
 
   const [connection, setConnection] = useState<ConnectionPhase>("connecting");
   const [bootstrap, setBootstrap] = useState<BootstrapInfo | null>(null);
@@ -259,15 +283,30 @@ export function ChatShell({ storedSessionId }: ChatShellProps) {
   const domainPromptsRef = useRef(new Map<string, PendingPrompt>());
   const [running, setRunning] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
-  const [activeProfile, setActiveProfile] = useState("default");
+  const [activeProfile, setActiveProfile] = useState(initialProfile ?? "default");
   const [profiles, setProfiles] = useState<string[]>(["default"]);
+  const [gatewayContract, setGatewayContract] = useState<number | undefined>();
   const [loadingSession, setLoadingSession] = useState(false);
   const [usageDialog, setUsageDialog] = useState<{
     loading: boolean;
     data?: UsageStats;
+    context?: ContextBreakdown;
     error?: string;
   } | null>(null);
+  const [recoveryOpen, setRecoveryOpen] = useState(false);
+  const [recoveryLoading, setRecoveryLoading] = useState(false);
+  const [recoveryBusy, setRecoveryBusy] = useState(false);
+  const [recoveryError, setRecoveryError] = useState<string>();
+  const [checkpoints, setCheckpoints] = useState<RollbackCheckpoint[]>([]);
+  const [selectedCheckpoint, setSelectedCheckpoint] = useState<RollbackCheckpoint>();
+  const [checkpointDiff, setCheckpointDiff] = useState<RollbackDiff>();
+  const [sessionAction, setSessionAction] = useState<"branch" | "compress" | null>(null);
+  const [sessionActionBusy, setSessionActionBusy] = useState(false);
+  const [newSessionOpen, setNewSessionOpen] = useState(false);
+  const [rightRailMode, setRightRailMode] = useState<"artifacts" | "files">("files");
+  const [workspaceRefreshKey, setWorkspaceRefreshKey] = useState(0);
   const loadedStoredIdRef = useRef<string | undefined>(undefined);
+  const initialProfileRef = useRef(initialProfile);
   const activeStoredIdRef = useRef<string | undefined>(storedSessionId);
   activeStoredIdRef.current = activeStoredId;
   const resumeGenerationRef = useRef(0);
@@ -323,9 +362,74 @@ export function ChatShell({ storedSessionId }: ChatShellProps) {
     [transcriptItems],
   );
 
+  useEffect(() => {
+    if (artifactRailOpen && selectedArtifactId) setRightRailMode("artifacts");
+  }, [artifactRailOpen, selectedArtifactId]);
+
   const refreshCapabilities = useCallback(() => {
     setCapabilities(transport.capabilities);
   }, [transport]);
+
+  const reportSessionSearchCapability = useCallback(
+    (support: "available" | "unavailable") => {
+      setFeatureSupport("sessionSearch", support);
+    },
+    [setFeatureSupport],
+  );
+
+  const reportWorkspaceCapability = useCallback(
+    (
+      operation: "list" | "read" | "validate",
+      support: "available" | "unavailable",
+    ) => {
+      const feature = operation === "list"
+        ? "workspaceList"
+        : operation === "read"
+          ? "workspaceRead"
+          : "workspaceValidate";
+      setFeatureSupport(feature, support);
+      if (support === "available") {
+        setFeatureSupport("workspaceFiles", "readOnly");
+      } else if (operation === "list" || operation === "validate") {
+        setFeatureSupport("workspaceFiles", "unavailable");
+      }
+    },
+    [setFeatureSupport],
+  );
+
+  useEffect(() => {
+    publishRuntime({
+      activeProfile,
+      activeStoredId,
+      bootstrap,
+      capabilities,
+      connection,
+      gatewayContract,
+      identity,
+      profiles,
+      running,
+      sessionTitle,
+    });
+  }, [
+    activeProfile,
+    activeStoredId,
+    bootstrap,
+    capabilities,
+    connection,
+    gatewayContract,
+    identity,
+    profiles,
+    publishRuntime,
+    running,
+    sessionTitle,
+  ]);
+
+  useEffect(() => {
+    const gatewayReady = connection === "connected" && capabilities?.gateway === true;
+    setFeatureSupport("activity", gatewayReady ? "available" : "unavailable");
+    setFeatureSupport("projects", gatewayContract !== undefined && gatewayContract >= 4 ? "available" : "readOnly");
+    setFeatureSupport("recovery", gatewayContract !== undefined && gatewayContract >= 4 ? "available" : "unavailable");
+  }, [capabilities?.gateway, connection, gatewayContract, setFeatureSupport]);
 
   const flushDeltas = useCallback(() => {
     deltaFrameRef.current = null;
@@ -354,7 +458,11 @@ export function ChatShell({ storedSessionId }: ChatShellProps) {
   );
 
   const applySnapshot = useCallback(
-    (snapshot: SessionSnapshot, historyMessages: Message[] = snapshot.messages) => {
+    (
+      snapshot: SessionSnapshot,
+      ownerProfile: string,
+      historyMessages: Message[] = snapshot.messages,
+    ) => {
       if (deltaFrameRef.current !== null) cancelAnimationFrame(deltaFrameRef.current);
       deltaFrameRef.current = null;
       pendingDeltasRef.current = [];
@@ -384,6 +492,12 @@ export function ChatShell({ storedSessionId }: ChatShellProps) {
               rawSource: snapshot.inflight.user,
               createdAt: new Date().toISOString(),
               status: "complete",
+              userOrdinal: nextTranscript.reduce(
+                (max, item) => item.kind === "message" && item.message.userOrdinal !== undefined
+                  ? Math.max(max, item.message.userOrdinal)
+                  : max,
+                -1,
+              ) + 1,
             },
           });
         }
@@ -407,8 +521,8 @@ export function ChatShell({ storedSessionId }: ChatShellProps) {
       domainPromptsRef.current.clear();
       setRunning(snapshot.running ?? snapshot.info?.running ?? snapshot.inflight?.streaming ?? false);
       setSessionTitle(snapshot.info?.title || tSessions("untitled"));
-      const snapshotProfile = snapshot.info?.profileName ?? activeProfile;
-      setModelSettings(chatSessionScopeKey(snapshotProfile, snapshot.identity.storedId), {
+      if (snapshot.info?.contract !== undefined) setGatewayContract(snapshot.info.contract);
+      setModelSettings(chatSessionScopeKey(ownerProfile, snapshot.identity.storedId), {
         ...(snapshot.info?.model ? { model: snapshot.info.model } : {}),
         ...(snapshot.info?.provider ? { provider: snapshot.info.provider } : {}),
         // A resumed snapshot is authoritative. Missing reasoning must clear a
@@ -416,28 +530,30 @@ export function ChatShell({ storedSessionId }: ChatShellProps) {
         reasoning: snapshot.info?.reasoningEffort ?? "",
         ...(snapshot.info?.fast === undefined ? {} : { fast: snapshot.info.fast }),
       });
-      if (snapshot.info?.profileName) setActiveProfile(snapshot.info.profileName);
+      setActiveProfile(ownerProfile);
     },
-    [activeProfile, setModelSettings, tSessions],
+    [setModelSettings, tSessions],
   );
 
   const resumeStoredSession = useCallback(
-    async (storedId: string, replacePath = false) => {
+    async (storedId: string, replacePath = false, ownerProfile = activeProfile) => {
       const generation = ++resumeGenerationRef.current;
       setLoadingSession(true);
       try {
         // Read raw rows before resuming. The subsequent snapshot is then the
         // freshness authority and can reject an older/incomplete history read.
-        const history = await transport.sessionMessages(storedId, activeProfile).catch(() => null);
+        const history = await transport.sessionMessages(storedId, ownerProfile).catch(() => null);
         if (generation !== resumeGenerationRef.current || activeStoredIdRef.current !== storedId) return;
-        const snapshot = await transport.sessionResume(storedId, { profile: activeProfile });
+        const snapshot = await transport.sessionResume(storedId, { profile: ownerProfile });
         if (generation !== resumeGenerationRef.current || activeStoredIdRef.current !== storedId) return;
         const durableMessages = reconcileSessionHistory(snapshot, history, storedId);
-        applySnapshot(snapshot, durableMessages);
+        applySnapshot(snapshot, ownerProfile, durableMessages);
         loadedStoredIdRef.current = storedId;
         setNotice(null);
         if (replacePath) {
-          window.history.replaceState(null, "", `/${locale}/c/${encodeURIComponent(snapshot.identity.storedId)}`);
+          router.replace(
+            `/${locale}/c/${encodeURIComponent(snapshot.identity.storedId)}?profile=${encodeURIComponent(ownerProfile)}`,
+          );
         }
       } catch (error) {
         if (generation !== resumeGenerationRef.current) return;
@@ -450,28 +566,32 @@ export function ChatShell({ storedSessionId }: ChatShellProps) {
         if (generation === resumeGenerationRef.current) setLoadingSession(false);
       }
     },
-    [activeProfile, applySnapshot, locale, refreshCapabilities, tErrors, transport],
+    [activeProfile, applySnapshot, locale, refreshCapabilities, router, tErrors, transport],
   );
 
   resumeStoredSessionRef.current = resumeStoredSession;
 
   useEffect(() => {
-    const onPopState = () => {
-      const match = window.location.pathname.match(/\/(?:fa|en)\/c\/([^/]+)$/);
-      const id = match?.[1] ? decodeURIComponent(match[1]) : undefined;
-      resumeGenerationRef.current += 1;
-      activeStoredIdRef.current = id;
-      identityRef.current = null;
-      setActiveStoredId(id);
-      loadedStoredIdRef.current = undefined;
-      setIdentity(null);
-      setRunning(false);
-      setTranscriptItems([]);
-      domainPromptsRef.current.clear();
-    };
-    window.addEventListener("popstate", onPopState);
-    return () => window.removeEventListener("popstate", onPopState);
-  }, []);
+    const ownerProfile = initialProfile ?? activeProfile;
+    if (initialProfile && initialProfile !== activeProfile) setActiveProfile(initialProfile);
+    if (storedSessionId === activeStoredIdRef.current && identityRef.current?.storedId === storedSessionId) return;
+    resumeGenerationRef.current += 1;
+    activeStoredIdRef.current = storedSessionId;
+    identityRef.current = null;
+    loadedStoredIdRef.current = undefined;
+    setActiveStoredId(storedSessionId);
+    setIdentity(null);
+    setRunning(false);
+    setTranscriptItems([]);
+    domainPromptsRef.current.clear();
+    if (storedSessionId && profileRequiredError) {
+      setNotice({kind: "error", message: tErrors("profileRequired")});
+      return;
+    }
+    if (storedSessionId && connection === "connected") {
+      void resumeStoredSession(storedSessionId, false, ownerProfile);
+    }
+  }, [activeProfile, connection, initialProfile, profileRequiredError, resumeStoredSession, storedSessionId, tErrors]);
 
   useEffect(() => {
     const unsubscribeState = transport.onConnectionState((state) => {
@@ -489,21 +609,22 @@ export function ChatShell({ storedSessionId }: ChatShellProps) {
         if (cancelled) return;
         setBootstrap(info);
         setCapabilities(transport.capabilities);
-        setActiveProfile(info.profile || "default");
+        const ownerProfile = initialProfileRef.current ?? "default";
+        setActiveProfile(ownerProfile);
         if (
           !transport.capabilities.gateway &&
           transport.capabilities.httpFallback &&
           !activeStoredIdRef.current
         ) {
           try {
-            const snapshot = await transport.sessionCreate();
+            const snapshot = await transport.sessionCreate(
+              { profile: ownerProfile },
+            );
             if (cancelled) return;
-            applySnapshot(snapshot);
+            applySnapshot(snapshot, ownerProfile);
             loadedStoredIdRef.current = snapshot.identity.storedId;
-            window.history.replaceState(
-              null,
-              "",
-              `/${locale}/c/${encodeURIComponent(snapshot.identity.storedId)}`,
+            router.replace(
+              `/${locale}/c/${encodeURIComponent(snapshot.identity.storedId)}?profile=${encodeURIComponent(ownerProfile)}`,
             );
           } catch (error) {
             if (!cancelled) {
@@ -546,10 +667,16 @@ export function ChatShell({ storedSessionId }: ChatShellProps) {
       speechPlaybackRef.current = null;
       transport.disconnect();
     };
-  }, [applySnapshot, locale, tErrors, transport]);
+  }, [applySnapshot, locale, router, tErrors, transport]);
 
   useEffect(() => {
     const unsubscribe = transport.onEvent((event) => {
+      recordActivityEvent(event, activeProfile);
+      if (event.type === "gateway.ready") {
+        const payload = record(event.payload);
+        const contract = Number(payload.desktop_contract ?? payload.contract);
+        if (Number.isFinite(contract)) setGatewayContract(contract);
+      }
       const active = identityRef.current;
       if (
         event.sessionId &&
@@ -571,8 +698,7 @@ export function ChatShell({ storedSessionId }: ChatShellProps) {
         queueDelta(eventText(event));
         return;
       }
-      if (event.type === "thinking.delta") return;
-      if (event.type === "reasoning.delta") {
+      if (event.type === "reasoning.delta" || event.type === "thinking.delta") {
         const delta = eventText(event);
         if (delta) {
           const id = reasoningIdRef.current
@@ -660,6 +786,8 @@ export function ChatShell({ storedSessionId }: ChatShellProps) {
       if (event.type === "session.info") {
         const payload = record(event.payload);
         const hasReasoningEffort = Object.hasOwn(payload, "reasoning_effort");
+        const eventContract = Number(payload.desktop_contract ?? payload.contract);
+        if (Number.isFinite(eventContract)) setGatewayContract(eventContract);
         if (typeof payload.running === "boolean") setRunning(payload.running);
         if (optionalString(payload.title)) setSessionTitle(String(payload.title));
         const stored = identityRef.current?.storedId;
@@ -732,6 +860,17 @@ export function ChatShell({ storedSessionId }: ChatShellProps) {
               ...(parseProgress(activity.progress) === undefined
                 ? {}
                 : { progress: parseProgress(activity.progress) }),
+              ...(activity.progress ? { progressText: activity.progress } : {}),
+              ...(activity.inlineDiff ? { inlineDiff: activity.inlineDiff } : {}),
+              ...(activity.durationSeconds === undefined
+                ? {}
+                : { durationSeconds: activity.durationSeconds }),
+              ...(previous?.startedAt
+                ? {}
+                : { startedAt: new Date(event.receivedAt).toISOString() }),
+              ...(event.type === "tool.complete"
+                ? { finishedAt: new Date(event.receivedAt).toISOString() }
+                : {}),
             },
           });
         });
@@ -791,13 +930,14 @@ export function ChatShell({ storedSessionId }: ChatShellProps) {
       }
     });
     return unsubscribe;
-  }, [activeProfile, addArtifact, flushDeltas, queryClient, queueDelta, setModelSettings, tErrors, tPrompts, transport]);
+  }, [activeProfile, addArtifact, flushDeltas, queryClient, queueDelta, recordActivityEvent, setModelSettings, tErrors, tPrompts, transport]);
 
   useEffect(() => {
+    if (profileRequiredError) return;
     if (connection !== "connected" || !activeStoredId) return;
     if (loadedStoredIdRef.current === activeStoredId && identity?.storedId === activeStoredId) return;
     void resumeStoredSession(activeStoredId);
-  }, [activeStoredId, connection, identity?.storedId, resumeStoredSession]);
+  }, [activeStoredId, connection, identity?.storedId, profileRequiredError, resumeStoredSession]);
 
   const sessionsQuery = useQuery({
     queryKey: ["hermes-sessions", activeProfile],
@@ -821,6 +961,26 @@ export function ChatShell({ storedSessionId }: ChatShellProps) {
       }
     },
     enabled: connection === "connected",
+  });
+
+  const projectsQuery = useQuery<ProjectTreePayload | null>({
+    queryKey: ["hermes-projects", activeProfile, gatewayContract],
+    queryFn: async () => {
+      try {
+        const payload = await transport.projects(activeProfile);
+        setFeatureSupport("projects", "available");
+        return payload;
+      } catch {
+        // Older gateways and a missing drill-in RPC degrade to local cwd
+        // grouping. They must not disable the rest of the session rail.
+        setFeatureSupport("projects", "readOnly");
+        return null;
+      }
+    },
+    enabled:
+      connection === "connected" &&
+      capabilities?.gateway === true &&
+      (gatewayContract ?? 0) >= 4,
   });
 
   useEffect(() => {
@@ -853,8 +1013,30 @@ export function ChatShell({ storedSessionId }: ChatShellProps) {
   );
   const models = modelsQuery.data ?? [];
   const commands = commandsQuery.data ?? [];
+  const projectPayload = projectsQuery.data ?? null;
+  const dialogProfiles = useMemo(
+    () => [...new Set([activeProfile, ...profiles])],
+    [activeProfile, profiles],
+  );
+  const newSessionProjects = useMemo(() => {
+    if (projectPayload?.projects.length) {
+      return projectPayload.projects.map((project) => ({
+        id: project.id,
+        name: project.name,
+        cwd: project.primaryPath ?? project.paths[0],
+      }));
+    }
+    const byCwd = new Map<string, {id: string; name: string; cwd: string}>();
+    for (const session of sessions) {
+      if (!session.cwd || byCwd.has(session.cwd)) continue;
+      const name = session.cwd.replace(/[\\/]+$/u, "").split(/[\\/]/u).at(-1) || session.cwd;
+      byCwd.set(session.cwd, {id: `cwd:${session.cwd}`, name, cwd: session.cwd});
+    }
+    return [...byCwd.values()];
+  }, [projectPayload, sessions]);
 
   useEffect(() => {
+    if (!active) return;
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLocaleLowerCase() === "k") {
         event.preventDefault();
@@ -865,17 +1047,26 @@ export function ChatShell({ storedSessionId }: ChatShellProps) {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [commandPaletteOpen, setCommandPaletteOpen]);
+  }, [active, commandPaletteOpen, setCommandPaletteOpen]);
 
-  const navigateToSession = useCallback((storedId: string, mode: "push" | "replace" = "push") => {
-    const path = `/${locale}/c/${encodeURIComponent(storedId)}`;
-    window.history[mode === "push" ? "pushState" : "replaceState"](null, "", path);
+  const navigateToSession = useCallback((
+    storedId: string,
+    mode: "push" | "replace" = "push",
+    ownerProfile = activeProfile,
+  ) => {
+    const path = `/${locale}/c/${encodeURIComponent(storedId)}?profile=${encodeURIComponent(ownerProfile)}`;
+    router[mode](path);
     activeStoredIdRef.current = storedId;
     setActiveStoredId(storedId);
-  }, [locale]);
+  }, [activeProfile, locale, router]);
 
-  async function createSession() {
+  async function createSession(input: NewSessionSubmission) {
     if (connection !== "connected" || !capabilities?.gateway || !capabilities.sessions) return;
+    const ownerProfile = input.profile.trim();
+    if (!/^[a-z0-9][a-z0-9_-]{0,63}$/u.test(ownerProfile) || ownerProfile === "all") {
+      setNotice({kind: "error", message: tErrors("profileRequired")});
+      return;
+    }
     resumeGenerationRef.current += 1;
     identityRef.current = null;
     setIdentity(null);
@@ -885,12 +1076,19 @@ export function ChatShell({ storedSessionId }: ChatShellProps) {
     setLoadingSession(true);
     try {
       const snapshot = await transport.sessionCreate({
-        ...(activeProfile !== "default" ? { profile: activeProfile } : {}),
+        profile: ownerProfile,
+        ...(input.cwd ? { cwd: input.cwd } : {}),
+        ...(input.model ? { model: input.model } : {}),
+        ...(input.provider ? { provider: input.provider } : {}),
+        ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
+        ...(input.fast === undefined ? {} : { fast: input.fast }),
       });
-      applySnapshot(snapshot);
+      setActiveProfile(ownerProfile);
+      applySnapshot(snapshot, ownerProfile);
       loadedStoredIdRef.current = snapshot.identity.storedId;
-      navigateToSession(snapshot.identity.storedId);
+      navigateToSession(snapshot.identity.storedId, "push", ownerProfile);
       await queryClient.invalidateQueries({ queryKey: ["hermes-sessions"] });
+      await queryClient.invalidateQueries({ queryKey: ["hermes-projects"] });
       setMobileRail(null);
     } catch (error) {
       refreshCapabilities();
@@ -914,6 +1112,39 @@ export function ChatShell({ storedSessionId }: ChatShellProps) {
     loadedStoredIdRef.current = undefined;
     navigateToSession(session.storedId);
     setMobileRail(null);
+  }
+
+  function selectSearchResult(sessionId: string, ownerProfile: string) {
+    if (!sessionId || !ownerProfile || ownerProfile === "all") return;
+    resumeGenerationRef.current += 1;
+    identityRef.current = null;
+    loadedStoredIdRef.current = undefined;
+    activeStoredIdRef.current = sessionId;
+    setActiveProfile(ownerProfile);
+    setIdentity(null);
+    setRunning(false);
+    setTranscriptItems([]);
+    domainPromptsRef.current.clear();
+    navigateToSession(sessionId, "push", ownerProfile);
+    setMobileRail(null);
+  }
+
+  async function validateNewSessionCwd(profile: string, cwd: string) {
+    try {
+      const params = new URLSearchParams({profile, cwd});
+      const response = await fetch(`/api/hermes/workspace/validate?${params.toString()}`, {
+        cache: "no-store",
+      });
+      const payload = record(await response.json());
+      const canonicalPath = optionalString(payload.canonicalPath);
+      if (!response.ok || payload.profile !== profile || !canonicalPath) {
+        return {valid: false, error: optionalString(payload.error)};
+      }
+      setFeatureSupport("workspaceValidate", "available");
+      return {valid: true, canonicalPath};
+    } catch (error) {
+      return {valid: false, error: error instanceof Error ? error.message : undefined};
+    }
   }
 
   async function renameSession(session: SessionSummary, title: string) {
@@ -967,7 +1198,7 @@ export function ChatShell({ storedSessionId }: ChatShellProps) {
       setIdentity(null);
       setActiveStoredId(undefined);
       setTranscriptItems([]);
-      window.history.pushState(null, "", `/${locale}`);
+      router.push(`/${locale}?profile=${encodeURIComponent(activeProfile)}`);
     }
     await queryClient.invalidateQueries({ queryKey: ["hermes-sessions"] });
   }
@@ -992,7 +1223,7 @@ export function ChatShell({ storedSessionId }: ChatShellProps) {
     setUsageDialog(null);
     setRunning(false);
     domainPromptsRef.current.clear();
-    window.history.pushState(null, "", `/${locale}`);
+    router.push(`/${locale}?profile=${encodeURIComponent(activeProfile)}`);
     await queryClient.invalidateQueries({ queryKey: ["hermes-sessions"] });
   }
 
@@ -1001,14 +1232,126 @@ export function ChatShell({ storedSessionId }: ChatShellProps) {
     if (!active || active.storedId !== session.storedId || !capabilities?.gateway || !capabilities.sessions) return;
     setUsageDialog({ loading: true });
     try {
-      const data = await transport.sessionUsage(active);
-      setUsageDialog({ loading: false, data });
+      const [data, context] = await Promise.all([
+        transport.sessionUsage(active),
+        transport.sessionContextBreakdown(active).catch(() => undefined),
+      ]);
+      setFeatureSupport("contextBreakdown", context ? "available" : "unavailable");
+      setUsageDialog({ loading: false, data, ...(context ? { context } : {}) });
     } catch (error) {
       refreshCapabilities();
       setUsageDialog({
         loading: false,
         error: error instanceof Error ? error.message : tErrors("generic"),
       });
+    }
+  }
+
+  async function openRecovery() {
+    const active = identityRef.current;
+    if (!active || running || (gatewayContract ?? 0) < 4) return;
+    setRecoveryOpen(true);
+    setRecoveryLoading(true);
+    setRecoveryError(undefined);
+    setSelectedCheckpoint(undefined);
+    setCheckpointDiff(undefined);
+    try {
+      setCheckpoints(await transport.rollbackList(active));
+    } catch (error) {
+      setRecoveryError(error instanceof Error ? error.message : tErrors("generic"));
+    } finally {
+      setRecoveryLoading(false);
+    }
+  }
+
+  async function selectRecoveryCheckpoint(checkpoint: RollbackCheckpoint) {
+    const active = identityRef.current;
+    if (!active || recoveryBusy) return;
+    setSelectedCheckpoint(checkpoint);
+    setCheckpointDiff(undefined);
+    setRecoveryError(undefined);
+    setRecoveryLoading(true);
+    try {
+      setCheckpointDiff(await transport.rollbackDiff(active, checkpoint.hash));
+    } catch (error) {
+      setRecoveryError(error instanceof Error ? error.message : tErrors("generic"));
+    } finally {
+      setRecoveryLoading(false);
+    }
+  }
+
+  async function undoLastTurn() {
+    const active = identityRef.current;
+    if (!active || running || recoveryBusy) return;
+    setRecoveryBusy(true);
+    setRecoveryError(undefined);
+    try {
+      const result = await transport.sessionUndo(active);
+      const history = await transport.sessionHistory(active);
+      setTranscriptItems(messagesToTranscript(history));
+      setDraft(chatSessionScopeKey(activeProfile, active.storedId), result.message);
+      setNotice({ kind: "info", message: result.notice || tSessions("undoSuccess") });
+      await queryClient.invalidateQueries({ queryKey: ["hermes-sessions"] });
+    } catch (error) {
+      setRecoveryError(error instanceof Error ? error.message : tErrors("generic"));
+    } finally {
+      setRecoveryBusy(false);
+    }
+  }
+
+  async function restoreCheckpoint(checkpoint: RollbackCheckpoint) {
+    const active = identityRef.current;
+    if (!active || running || recoveryBusy || (gatewayContract ?? 0) < 4) return;
+    setRecoveryBusy(true);
+    setRecoveryError(undefined);
+    try {
+      const [processResult, delegationResult] = await Promise.all([
+        transport.request("process.list", { session_id: active.runtimeId }),
+        transport.request("delegation.status", { session_id: active.runtimeId }),
+      ]);
+      const processPayload = record(processResult);
+      const activeProcesses = Array.isArray(processPayload.processes)
+        ? processPayload.processes.filter((value) => {
+            const status = String(record(value).status ?? "").toLowerCase();
+            return !["complete", "completed", "exited", "failed", "killed"].includes(status);
+          })
+        : [];
+      const delegationPayload = record(delegationResult);
+      const activeSubagents = Array.isArray(delegationPayload.active)
+        ? delegationPayload.active.length
+        : Number(delegationPayload.active_count ?? 0);
+      if (activeProcesses.length || activeSubagents > 0) throw new Error(tSessions("rollbackBusy"));
+      if (!window.confirm(tSessions("rollbackConfirm"))) return;
+      const result = await transport.rollbackRestore(active, checkpoint.hash);
+      if (!result.success || result.historySynced !== true) {
+        throw new Error(result.message || tSessions("rollbackSyncFailed"));
+      }
+      const history = await transport.sessionHistory(active);
+      setTranscriptItems(messagesToTranscript(history));
+      useChatUiStore.getState().clearArtifacts(chatSessionScopeKey(activeProfile, active.storedId));
+      setWorkspaceRefreshKey((current) => current + 1);
+      const verification = await transport.request("verification.status", {
+        session_id: active.runtimeId,
+        stored_session_id: active.storedId,
+      }).catch(() => null);
+      if (verification) {
+        const verificationRecord = record(verification);
+        recordActivityEvent({
+          connectionEpoch: Date.now(),
+          id: localId("rollback-verification"),
+          payload: verificationRecord.verification ?? verificationRecord,
+          receivedAt: Date.now(),
+          sessionId: active.runtimeId,
+          type: "verification.status",
+        }, activeProfile);
+      }
+      setRecoveryOpen(false);
+      setNotice({ kind: "info", message: tSessions("rollbackSuccess") });
+      await queryClient.invalidateQueries({ queryKey: ["hermes-sessions"] });
+    } catch (error) {
+      setRecoveryError(error instanceof Error ? error.message : tErrors("generic"));
+    } finally {
+      setRecoveryBusy(false);
     }
   }
 
@@ -1051,6 +1394,8 @@ export function ChatShell({ storedSessionId }: ChatShellProps) {
       setDraft(activeKey, "");
       return;
     }
+    const isCommand = text.startsWith("/")
+      && commands.some((command) => text === `/${command.name}` || text.startsWith(`/${command.name} `));
     const userMessage: ChatMessage = {
       id: localId("user"),
       role: "user",
@@ -1058,11 +1403,21 @@ export function ChatShell({ storedSessionId }: ChatShellProps) {
       rawSource: text,
       createdAt: new Date().toISOString(),
       status: "complete",
+      ...(isCommand
+        ? {}
+        : {
+            userOrdinal: transcriptItems.reduce(
+              (max, item) => item.kind === "message" && item.message.userOrdinal !== undefined
+                ? Math.max(max, item.message.userOrdinal)
+                : max,
+              -1,
+            ) + 1,
+          }),
     };
     setTranscriptItems((current) => reduceTranscript(current, { type: "append-message", message: userMessage }));
     setRunning(true);
     try {
-      if (text.startsWith("/") && commands.some((command) => text === `/${command.name}` || text.startsWith(`/${command.name} `))) {
+      if (isCommand) {
         const result = await transport.command(active, text);
         setTranscriptItems((current) => reduceTranscript(current, {
           type: "append-message",
@@ -1091,6 +1446,66 @@ export function ChatShell({ storedSessionId }: ChatShellProps) {
       }));
       setNotice({ kind: "error", message: error instanceof Error ? error.message : tErrors("generic") });
     }
+  }
+
+  async function rewindAndSubmit(target: ChatMessage, text: string) {
+    const active = identityRef.current;
+    if (!active || target.userOrdinal === undefined || running || (gatewayContract ?? 0) < 4) return;
+    if (!window.confirm(tChat("rewindConfirm"))) return;
+    const previous = transcriptItems;
+    const index = previous.findIndex((item) => item.kind === "message" && item.message.id === target.id);
+    if (index < 0) {
+      setNotice({ kind: "warning", message: tChat("rewindFailed") });
+      return;
+    }
+    const replacement: ChatMessage = {
+      id: localId("user-rewind"),
+      role: "user",
+      content: text,
+      rawSource: text,
+      createdAt: new Date().toISOString(),
+      status: "complete",
+      userOrdinal: target.userOrdinal,
+    };
+    setTranscriptItems([
+      ...previous.slice(0, index),
+      { kind: "message", key: `message:${replacement.id}`, message: replacement },
+    ]);
+    setRunning(true);
+    try {
+      await transport.send(active, text, {
+        busyMode: "reject",
+        truncateBeforeUserOrdinal: target.userOrdinal,
+      });
+      setDraft(chatSessionScopeKey(activeProfile, active.storedId), "");
+    } catch (error) {
+      try {
+        const authoritative = await transport.sessionHistory(active);
+        setTranscriptItems(messagesToTranscript(authoritative));
+      } catch {
+        setTranscriptItems(previous);
+      }
+      setRunning(false);
+      setNotice({
+        kind: "error",
+        message: error instanceof Error ? error.message : tChat("rewindFailed"),
+      });
+    }
+  }
+
+  async function regenerateMessage(message: ChatMessage) {
+    const assistantIndex = transcriptItems.findIndex(
+      (item) => item.kind === "message" && item.message.id === message.id,
+    );
+    if (assistantIndex < 0) return;
+    for (let index = assistantIndex - 1; index >= 0; index -= 1) {
+      const item = transcriptItems[index];
+      if (item?.kind === "message" && item.message.role === "user" && item.message.userOrdinal !== undefined) {
+        await rewindAndSubmit(item.message, item.message.rawSource);
+        return;
+      }
+    }
+    setNotice({ kind: "warning", message: tChat("rewindFailed") });
   }
 
   useEffect(() => {
@@ -1202,6 +1617,46 @@ export function ChatShell({ storedSessionId }: ChatShellProps) {
     }));
   }
 
+  async function attachWorkspaceEntry(entry: WorkspaceEntry) {
+    const active = identityRef.current;
+    if (!active || !capabilities?.attachments || running) return;
+    const attachmentKey = chatSessionScopeKey(activeProfile, active.storedId);
+    const pending: ComposerAttachment = {
+      id: localId("workspace-attachment"),
+      name: entry.name,
+      kind: "file",
+      size: entry.size ?? 0,
+      mimeType: entry.mimeType ?? "application/octet-stream",
+      status: "uploading",
+    };
+    const current = useChatUiStore.getState().attachments[attachmentKey] ?? [];
+    setAttachments(attachmentKey, [...current, pending]);
+    try {
+      const remote = await transport.attach(active, {
+        kind: "file",
+        name: entry.name,
+        mimeType: pending.mimeType,
+        size: pending.size,
+        path: entry.path,
+      });
+      const latest = useChatUiStore.getState().attachments[attachmentKey] ?? [];
+      setAttachments(attachmentKey, latest.map((item) => item.id === pending.id
+        ? {
+            ...item,
+            status: "ready",
+            remoteId: remote.id,
+            ...(remote.refText ? {refText: remote.refText} : {}),
+          }
+        : item));
+    } catch (error) {
+      const latest = useChatUiStore.getState().attachments[attachmentKey] ?? [];
+      setAttachments(attachmentKey, latest.map((item) => item.id === pending.id
+        ? {...item, status: "failed", error: error instanceof Error ? error.message : tAttachments("failed")}
+        : item));
+      throw error;
+    }
+  }
+
   function removeAttachment(id: string) {
     if (!identity) return;
     const attachmentKey = chatSessionScopeKey(activeProfile, identity.storedId);
@@ -1271,29 +1726,37 @@ export function ChatShell({ storedSessionId }: ChatShellProps) {
     }
   }
 
-  async function branchSession() {
+  async function branchSession(name?: string) {
     if (!identity) return;
+    setSessionActionBusy(true);
     try {
-      const snapshot = await transport.sessionBranch(identity);
-      applySnapshot(snapshot);
+      const snapshot = await transport.sessionBranch(identity, name);
+      applySnapshot(snapshot, activeProfile);
       loadedStoredIdRef.current = snapshot.identity.storedId;
-      navigateToSession(snapshot.identity.storedId);
+      navigateToSession(snapshot.identity.storedId, "push", activeProfile);
+      setSessionAction(null);
       await queryClient.invalidateQueries({ queryKey: ["hermes-sessions"] });
     } catch (error) {
       refreshCapabilities();
       setNotice({ kind: "error", message: error instanceof Error ? error.message : tErrors("generic") });
+    } finally {
+      setSessionActionBusy(false);
     }
   }
 
-  async function compressSession() {
+  async function compressSession(focusTopic?: string) {
     if (!identity) return;
+    setSessionActionBusy(true);
     try {
-      const compressed = await transport.sessionCompress(identity);
+      const compressed = await transport.sessionCompress(identity, focusTopic);
       setTranscriptItems(messagesToTranscript(compressed));
+      setSessionAction(null);
       await queryClient.invalidateQueries({ queryKey: ["hermes-sessions"] });
     } catch (error) {
       refreshCapabilities();
       setNotice({ kind: "error", message: error instanceof Error ? error.message : tErrors("generic") });
+    } finally {
+      setSessionActionBusy(false);
     }
   }
 
@@ -1375,13 +1838,13 @@ export function ChatShell({ storedSessionId }: ChatShellProps) {
         transport.capabilities.httpFallback &&
         !activeStoredIdRef.current
       ) {
-        const snapshot = await transport.sessionCreate();
-        applySnapshot(snapshot);
+        const snapshot = await transport.sessionCreate(
+          { profile: activeProfile },
+        );
+        applySnapshot(snapshot, activeProfile);
         loadedStoredIdRef.current = snapshot.identity.storedId;
-        window.history.replaceState(
-          null,
-          "",
-          `/${locale}/c/${encodeURIComponent(snapshot.identity.storedId)}`,
+        router.replace(
+          `/${locale}/c/${encodeURIComponent(snapshot.identity.storedId)}?profile=${encodeURIComponent(activeProfile)}`,
         );
       }
     } catch (error) {
@@ -1466,18 +1929,31 @@ export function ChatShell({ storedSessionId }: ChatShellProps) {
           closeDescription: tSessions("closeDescription"),
           renameTitle: tSessions("renameTitle"),
         }}
+        projectBrowser={(
+          <ProjectSessionBrowser
+            activeSessionId={identity?.storedId ?? activeStoredId}
+            fallbackSessions={sessions}
+            locale={locale}
+            onSelectSession={(sessionId) => selectSearchResult(sessionId, activeProfile)}
+            payload={projectPayload}
+          />
+        )}
         canCreate={gatewaySessionControls}
         canManage={gatewaySessionControls}
         onCloseMobile={() => setMobileRail(null)}
-        onCreate={() => void createSession()}
+        onCreate={() => setNewSessionOpen(true)}
         onSelect={(session) => void selectSession(session)}
         onRename={renameSession}
         onDelete={deleteSession}
         onClose={gatewaySessionControls && identity ? closeSession : undefined}
         onUsage={gatewaySessionControls && identity ? showSessionUsage : undefined}
+        searchEnabled={connection === "connected"}
+        searchProfile={activeProfile}
+        onSearchCapabilityChange={reportSessionSearchCapability}
+        onSelectSearchResult={(result) => selectSearchResult(result.sessionId, result.profile)}
       />
 
-      <section className="chat-main" id="main-content">
+      <section className="chat-main" id={active ? "main-content" : undefined}>
         <ChatHeader
           locale={locale}
           title={sessionTitle}
@@ -1506,9 +1982,11 @@ export function ChatShell({ storedSessionId }: ChatShellProps) {
             theme: tSettings("theme"),
             branch: tSessions("branch"),
             compress: tSessions("compress"),
+            recovery: tSessions("recovery"),
           }}
           onOpenSessions={() => setMobileRail("sessions")}
           onOpenArtifacts={() => {
+            setRightRailMode("files");
             setArtifactRailOpen(true);
             setMobileRail("artifacts");
           }}
@@ -1523,12 +2001,13 @@ export function ChatShell({ storedSessionId }: ChatShellProps) {
             setTranscriptItems([]);
             domainPromptsRef.current.clear();
             setActiveStoredId(undefined);
-            window.history.pushState(null, "", `/${locale}`);
+            router.push(`/${locale}?profile=${encodeURIComponent(profile)}`);
             await queryClient.invalidateQueries({ queryKey: ["hermes-sessions"] });
           }}
           onReasoningChange={setSessionReasoning}
-          onBranch={branchSession}
-          onCompress={compressSession}
+          onBranch={() => setSessionAction("branch")}
+          onCompress={() => setSessionAction("compress")}
+          onRecovery={identity && !running && (gatewayContract ?? 0) >= 4 ? () => void openRecovery() : undefined}
         />
 
         {notice ? (
@@ -1582,13 +2061,19 @@ export function ChatShell({ storedSessionId }: ChatShellProps) {
             expired: tPrompts("expired"),
             secretPlaceholder: tPrompts("secretPlaceholder"),
             sudoPlaceholder: tPrompts("sudoPlaceholder"),
+            edit: tChat("edit"),
+            saveEdit: tChat("saveEdit"),
+            regenerate: tChat("regenerate"),
           }}
           emptyActionLabel={emptyState.action}
           ttsEnabled={capabilities?.voice}
-          onEmptyAction={emptyState.action ? () => void createSession() : undefined}
+          onEmptyAction={emptyState.action ? () => setNewSessionOpen(true) : undefined}
           onSpeak={capabilities?.voice ? speak : undefined}
           onSpeechError={(message) => setNotice({ kind: "warning", message })}
           onPromptResponse={respondToPrompt}
+          canRewind={Boolean(identity && !running && (gatewayContract ?? 0) >= 4)}
+          onEditMessage={(message, text) => rewindAndSubmit(message, text)}
+          onRegenerate={regenerateMessage}
         />
 
         <Composer
@@ -1632,26 +2117,50 @@ export function ChatShell({ storedSessionId }: ChatShellProps) {
         />
       </section>
 
-      <ArtifactRail
-        artifacts={artifacts}
-        selectedId={selectedArtifactId}
-        open={artifactRailOpen}
-        mobileOpen={openMobileRail === "artifacts"}
-        width={artifactRailWidth}
-        labels={{
-          title: tTools("title"),
-          empty: tAttachments("previewUnavailable"),
-          close: tNav("closePanel"),
-          resize: tNav("collapseSidebar"),
-          previewUnavailable: tAttachments("previewUnavailable"),
-        }}
-        onSelect={(id) => selectArtifact(composerKey, id)}
-        onClose={() => {
-          setArtifactRailOpen(false);
-          setMobileRail(null);
-        }}
-        onWidthChange={setArtifactRailWidth}
-      />
+      {rightRailMode === "files" ? (
+        <WorkspaceFilesRail
+          artifactCount={artifacts.length}
+          locale={locale}
+          mobileOpen={openMobileRail === "artifacts"}
+          onAttach={
+            identity && connection === "connected" && capabilities?.gateway && capabilities.attachments && !running
+              ? attachWorkspaceEntry
+              : undefined
+          }
+          onCapabilityChange={reportWorkspaceCapability}
+          onClose={() => {
+            setArtifactRailOpen(false);
+            setMobileRail(null);
+          }}
+          onOpenArtifacts={() => setRightRailMode("artifacts")}
+          open={artifactRailOpen}
+          profile={activeProfile}
+          refreshKey={workspaceRefreshKey}
+          sessionId={identity?.storedId}
+          width={artifactRailWidth}
+        />
+      ) : (
+        <ArtifactRail
+          artifacts={artifacts}
+          selectedId={selectedArtifactId}
+          open={artifactRailOpen}
+          mobileOpen={openMobileRail === "artifacts"}
+          width={artifactRailWidth}
+          labels={{
+            title: tTools("title"),
+            empty: tAttachments("previewUnavailable"),
+            close: tNav("closePanel"),
+            resize: tNav("collapseSidebar"),
+            previewUnavailable: tAttachments("previewUnavailable"),
+          }}
+          onSelect={(id) => selectArtifact(composerKey, id)}
+          onClose={() => {
+            setArtifactRailOpen(false);
+            setMobileRail(null);
+          }}
+          onWidthChange={setArtifactRailWidth}
+        />
+      )}
 
       {openMobileRail ? (
         <button
@@ -1700,6 +2209,22 @@ export function ChatShell({ storedSessionId }: ChatShellProps) {
                     <dd dir="ltr">{new Intl.NumberFormat(locale, { style: "currency", currency: "USD" }).format(usageDialog.data.costUsd)}</dd>
                   </div>
                 ) : null}
+                {usageDialog.context ? (
+                  <>
+                    {([
+                      ["contextSystem", usageDialog.context.systemPrompt],
+                      ["contextHistory", usageDialog.context.history],
+                      ["contextTools", usageDialog.context.tools],
+                      ["contextAttachments", usageDialog.context.attachments],
+                      ["contextOther", usageDialog.context.other],
+                    ] as const).map(([label, value]) => value === undefined ? null : (
+                      <div key={label}>
+                        <dt>{tSessions(label)}</dt>
+                        <dd>{value.toLocaleString(locale)}</dd>
+                      </div>
+                    ))}
+                  </>
+                ) : null}
               </dl>
             ) : null}
             <div className="modal__actions">
@@ -1710,6 +2235,57 @@ export function ChatShell({ storedSessionId }: ChatShellProps) {
           </section>
         </div>
       ) : null}
+
+      <NewSessionDialog
+        defaultCwd={sessions.find((session) => session.storedId === identity?.storedId)?.cwd}
+        defaultProfile={activeProfile}
+        locale={locale}
+        models={models}
+        onOpenChange={setNewSessionOpen}
+        onSubmit={createSession}
+        onValidateCwd={validateNewSessionCwd}
+        open={newSessionOpen}
+        pending={loadingSession}
+        profiles={dialogProfiles}
+        projects={newSessionProjects}
+      />
+
+      <RecoveryDialog
+        open={recoveryOpen}
+        loading={recoveryLoading}
+        busy={recoveryBusy}
+        checkpoints={checkpoints}
+        selected={selectedCheckpoint}
+        diff={checkpointDiff}
+        error={recoveryError}
+        labels={{
+          title: tSessions("recovery"),
+          undo: tSessions("undo"),
+          rollback: tSessions("rollback"),
+          select: tSessions("rollbackSelect"),
+          warning: tSessions("rollbackWarning"),
+          close: tActions("close"),
+          empty: tSessions("rollbackEmpty"),
+        }}
+        onClose={() => setRecoveryOpen(false)}
+        onUndo={undoLastTurn}
+        onSelect={selectRecoveryCheckpoint}
+        onRestore={restoreCheckpoint}
+      />
+
+      <SessionActionDialog
+        open={sessionAction !== null}
+        busy={sessionActionBusy}
+        label={sessionAction === "branch" ? tSessions("branch") : tSessions("compress")}
+        placeholder={sessionAction === "branch" ? tSessions("branchName") : tSessions("compressFocus")}
+        submitLabel={sessionAction === "branch" ? tSessions("branch") : tSessions("compress")}
+        cancelLabel={tSessions("cancel")}
+        onClose={() => setSessionAction(null)}
+        onSubmit={async (value) => {
+          if (sessionAction === "branch") await branchSession(value);
+          else if (sessionAction === "compress") await compressSession(value);
+        }}
+      />
 
       <CommandPalette
         open={commandPaletteOpen}

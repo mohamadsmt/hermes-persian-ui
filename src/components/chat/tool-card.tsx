@@ -96,6 +96,9 @@ export function ToolCard({ tool, labels, onExpandedChange }: ToolCardProps) {
           </bdi>
         </span>
         <span className="tool-card__meta">
+          {tool.durationSeconds !== undefined ? (
+            <bdi dir="ltr" className="technical-inline">{tool.durationSeconds.toFixed(1)}s</bdi>
+          ) : null}
           <span className={`status-pill status-pill--${tool.status}`}>
             {labels[tool.status]}
           </span>
@@ -115,7 +118,9 @@ export function ToolCard({ tool, labels, onExpandedChange }: ToolCardProps) {
         </div>
       ) : null}
 
-      {tool.summary ? <p className="tool-card__summary bidi-block">{tool.summary}</p> : null}
+      {tool.summary || tool.progressText ? (
+        <p className="tool-card__summary bidi-block">{tool.summary ?? tool.progressText}</p>
+      ) : null}
 
       {open ? (
         <div className="tool-card__body">
@@ -132,6 +137,14 @@ export function ToolCard({ tool, labels, onExpandedChange }: ToolCardProps) {
               <h4>{labels.output}</h4>
               <pre dir="ltr" className="technical-block">
                 <code>{formatToolValue(tool.output)}</code>
+              </pre>
+            </section>
+          ) : null}
+          {tool.inlineDiff ? (
+            <section>
+              <h4>Diff</h4>
+              <pre dir="ltr" className="technical-block">
+                <code>{String(redactSensitive(tool.inlineDiff))}</code>
               </pre>
             </section>
           ) : null}

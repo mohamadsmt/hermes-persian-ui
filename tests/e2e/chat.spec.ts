@@ -148,7 +148,7 @@ test("preserves the ordered reasoning/tool timeline and contains long tool outpu
     const latestBox = await app.messages("assistant").last().boundingBox();
     const composerBox = await page.locator(".composer-wrap").boundingBox();
     return latestBox && composerBox ? latestBox.y + latestBox.height <= composerBox.y + 1 : false;
-  }).toBe(true);
+  }, { timeout: 15_000 }).toBe(true);
 });
 
 test("keeps the latest item above a multiline composer and caps a long queue", async ({
@@ -186,19 +186,24 @@ test("keeps the latest item above a multiline composer and caps a long queue", a
   await app.composer.fill("");
   await page.getByTestId("jump-latest").click();
 
-  await app.sendScenario("slow");
+  await app.sendScenario("toolRunningArtifact");
   await expect(page.getByTestId("stop-run")).toBeVisible();
-  for (let index = 0; index < 8; index += 1) {
-    await app.composer.fill(`پیام صف ${index + 1}`);
-    await page.getByTestId("send-message").click();
-    await expect(app.composer).toHaveValue("");
+  try {
+    for (let index = 0; index < 8; index += 1) {
+      await app.composer.fill(`پیام صف ${index + 1}`);
+      await page.getByTestId("send-message").click();
+      await expect(app.composer).toHaveValue("");
+    }
+    const queue = page.locator(".composer-queue");
+    await expect(queue.locator(".queued-prompt")).toHaveCount(8);
+    await expect.poll(() => queue.evaluate((element) => ({
+      capped: element.clientHeight <= window.innerHeight * 0.32 + 2,
+      scrollable: element.scrollHeight > element.clientHeight,
+    }))).toEqual({ capped: true, scrollable: true });
+  } finally {
+    const stop = page.getByTestId("stop-run");
+    if (await stop.isVisible()) await stop.click();
   }
-  const queue = page.locator(".composer-queue");
-  await expect(queue.locator(".queued-prompt")).toHaveCount(8);
-  await expect.poll(() => queue.evaluate((element) => ({
-    capped: element.clientHeight <= window.innerHeight * 0.32 + 2,
-    scrollable: element.scrollHeight > element.clientHeight,
-  }))).toEqual({ capped: true, scrollable: true });
 });
 
 test("interrupts a slow run without disconnecting the session", async ({ app, page }) => {

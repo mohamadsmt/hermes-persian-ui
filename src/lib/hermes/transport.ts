@@ -32,11 +32,17 @@ import type {
   CapabilitySet,
   CommandResult,
   ConnectionState,
+  ContextBreakdown,
   HermesEvent,
   HermesTransport,
   Message,
   ModelOption,
   PendingPrompt,
+  ProjectNode,
+  ProjectTreePayload,
+  RollbackCheckpoint,
+  RollbackDiff,
+  RollbackRestoreResult,
   SendOptions,
   SessionCreateInput,
   SessionIdentity,
@@ -45,6 +51,7 @@ import type {
   SessionResumeOptions,
   SessionSnapshot,
   SessionSummary,
+  SessionUndoResult,
   UsageStats,
 } from "./types"
 import { HERMES_MIN_GATEWAY_CONTRACT } from "./types"
@@ -228,14 +235,15 @@ export class BrowserHermesTransport implements HermesTransport {
     }
   }
 
-  async sessionCreate(input: SessionCreateInput = {}): Promise<SessionSnapshot> {
+  async sessionCreate(input: SessionCreateInput): Promise<SessionSnapshot> {
+    const profile = requireProfileName(input.profile)
     if (this.httpSelection) return this.createHttpSession(input)
     const raw = await this.request("session.create", {
       cols: 100,
       source: "web",
       ...(input.cwd ? { cwd: input.cwd } : {}),
       ...(input.title ? { title: input.title } : {}),
-      ...(input.profile ? { profile: input.profile } : {}),
+      profile,
       ...(input.model ? { model: input.model } : {}),
       ...(input.provider ? { provider: input.provider } : {}),
       ...(input.reasoningEffort ? { reasoning_effort: input.reasoningEffort } : {}),
@@ -285,7 +293,7 @@ export class BrowserHermesTransport implements HermesTransport {
     return filterSessions(normalized, options.query)
   }
 
-  async sessionResume(storedId: string, options: SessionResumeOptions = {}): Promise<SessionSnapshot> {
+  async sessionResume(storedId: string, options: SessionResumeOptions): Promise<SessionSnapshot> {
     if (this.httpSelection) {
       const session = this.httpSessions.get(storedId)
       if (!session) throw new Error("HTTP fallback conversations are local to this page and cannot be resumed")
@@ -295,7 +303,7 @@ export class BrowserHermesTransport implements HermesTransport {
       session_id: storedId,
       cols: 100,
       source: "web",
-      ...(options.profile ? { profile: options.profile } : {}),
+      profile: requireProfileName(options.profile),
       ...(options.lazy === undefined ? {} : { lazy: options.lazy }),
     })
     const snapshot = normalizeSessionSnapshot(rawSessionSnapshotSchema.parse(raw), storedId)
@@ -424,6 +432,116 @@ export class BrowserHermesTransport implements HermesTransport {
     return normalizeUsage(rawUsageSchema.parse(await this.request("session.usage", { session_id: runtimeId(session) })))
   }
 
+  async sessionContextBreakdown(session: SessionIdentity | string): Promise<ContextBreakdown> {
+    if (this.httpSelection) throw unsupportedHttpFallback("session.context_breakdown")
+    const result = asRecord(await this.request("session.context_breakdown", {
+      session_id: runtimeId(session),
+    }))
+    const source = asRecord(result.breakdown ?? result.context ?? result)
+    return {
+      ...numberField(source, "total", "total_tokens"),
+      ...numberField(source, "max", "context_max", "max_tokens"),
+      ...numberField(source, "percent", "context_percent", "percent_used"),
+      ...numberField(source, "systemPrompt", "system_prompt", "system"),
+      ...numberField(source, "history", "messages", "conversation"),
+      ...numberField(source, "tools", "tool_definitions", "tool_tokens"),
+      ...numberField(source, "attachments", "attachment_tokens"),
+      ...numberField(source, "other"),
+    }
+  }
+
+  async sessionUndo(session: SessionIdentity | string): Promise<SessionUndoResult> {
+    if (this.httpSelection) throw unsupportedHttpFallback("command.dispatch undo")
+    const result = asRecord(await this.request("command.dispatch", {
+      session_id: runtimeId(session),
+      name: "undo",
+      arg: "1",
+    }))
+    if (result.type !== "prefill") throw new Error(optionalString(result.notice) ?? "Hermes undo did not return an editable turn")
+    return {
+      message: String(result.message ?? ""),
+      ...(optionalString(result.notice) ? { notice: String(result.notice) } : {}),
+    }
+  }
+
+  async rollbackList(session: SessionIdentity | string): Promise<RollbackCheckpoint[]> {
+    if (this.httpSelection) throw unsupportedHttpFallback("rollback.list")
+    const result = asRecord(await this.request("rollback.list", { session_id: runtimeId(session) }))
+    const checkpoints = Array.isArray(result.checkpoints) ? result.checkpoints : []
+    return checkpoints.flatMap((value) => {
+      const row = asRecord(value)
+      const hash = optionalString(row.hash)
+      if (!hash) return []
+      return [{
+        hash,
+        ...(optionalString(row.timestamp) ? { timestamp: String(row.timestamp) } : {}),
+        ...(optionalString(row.message ?? row.reason) ? { message: String(row.message ?? row.reason) } : {}),
+      }]
+    })
+  }
+
+  async rollbackDiff(session: SessionIdentity | string, hash: string): Promise<RollbackDiff> {
+    if (this.httpSelection) throw unsupportedHttpFallback("rollback.diff")
+    const result = asRecord(await this.request("rollback.diff", {
+      session_id: runtimeId(session),
+      hash,
+    }))
+    return {
+      diff: String(result.diff ?? ""),
+      ...(optionalString(result.stat) ? { stat: String(result.stat) } : {}),
+    }
+  }
+
+  async rollbackRestore(session: SessionIdentity | string, hash: string): Promise<RollbackRestoreResult> {
+    if (this.httpSelection) throw unsupportedHttpFallback("rollback.restore")
+    const result = asRecord(await this.request("rollback.restore", {
+      session_id: runtimeId(session),
+      hash,
+    }))
+    return {
+      success: result.success === true,
+      ...(typeof result.history_removed === "number" ? { historyRemoved: result.history_removed } : {}),
+      ...(typeof result.history_synced === "boolean" ? { historySynced: result.history_synced } : {}),
+      ...(optionalString(result.message ?? result.error) ? { message: String(result.message ?? result.error) } : {}),
+    }
+  }
+
+  async projects(rawProfile: string): Promise<ProjectTreePayload> {
+    if (this.httpSelection) throw unsupportedHttpFallback("projects.tree")
+    const profile = requireProfileName(rawProfile)
+    const result = asRecord(await this.request("projects.tree", { profile, preview_limit: 3 }))
+    const projects = Array.isArray(result.projects)
+      ? result.projects.map((value, index) => normalizeProjectNode(value, index))
+      : []
+    const hydratedProjects = await Promise.all(projects.map(async (project, index) => {
+      try {
+        const detail = asRecord(await this.request("projects.project_sessions", {
+          profile,
+          project_id: project.id,
+          session_limit: 5_000,
+        }))
+        if (detail.project) return normalizeProjectNode(detail.project, index)
+        if (Array.isArray(detail.sessions)) {
+          return normalizeProjectNode({
+            ...project,
+            sessions: detail.sessions,
+          }, index)
+        }
+      } catch {
+        // A v4 tree remains useful when only this project's drill-in failed.
+      }
+      return project
+    }))
+    return {
+      profile,
+      projects: hydratedProjects,
+      ...(optionalString(result.active_id) ? { activeId: String(result.active_id) } : {}),
+      scopedSessionIds: Array.isArray(result.scoped_session_ids)
+        ? result.scoped_session_ids.filter((value): value is string => typeof value === "string")
+        : [],
+    }
+  }
+
   async send(session: SessionIdentity | string, text: string, options: SendOptions = {}): Promise<void> {
     if (!text.trim()) throw new Error("Message cannot be empty")
     if (this.httpSelection) {
@@ -431,13 +549,16 @@ export class BrowserHermesTransport implements HermesTransport {
       return
     }
     if (options.busyMode === "steer" && (await this.steer(session, text))) return
-    await this.request("prompt.submit", {
+    const result = asRecord(await this.request("prompt.submit", {
       session_id: runtimeId(session),
       text,
       ...(options.truncateBeforeUserOrdinal === undefined
         ? {}
         : { truncate_before_user_ordinal: options.truncateBeforeUserOrdinal }),
-    })
+    }))
+    if (options.truncateBeforeUserOrdinal !== undefined && result.status !== "streaming") {
+      throw new Error(`Hermes history rewind was not started (status: ${String(result.status ?? "missing")})`)
+    }
   }
 
   async stop(session: SessionIdentity | string): Promise<void> {
@@ -886,6 +1007,87 @@ function sameOriginWebSocketUrl(path: string): string {
   url.username = ""
   url.password = ""
   return url.toString()
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === "object" ? value as Record<string, unknown> : {}
+}
+
+function numberField(
+  source: Record<string, unknown>,
+  outputName: string,
+  ...inputNames: string[]
+): Record<string, number> {
+  for (const name of inputNames) {
+    const value = source[name]
+    const numeric = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : NaN
+    if (Number.isFinite(numeric)) return { [outputName]: numeric }
+  }
+  return {}
+}
+
+function normalizeProjectNode(value: unknown, index: number): ProjectNode {
+  const row = asRecord(value)
+  const rawRepositories = Array.isArray(row.repositories)
+    ? row.repositories
+    : Array.isArray(row.repos)
+      ? row.repos
+      : []
+  const repositories = rawRepositories.map((repository, repositoryIndex) => {
+    const repo = asRecord(repository)
+    const rawLanes = Array.isArray(repo.lanes) ? repo.lanes : []
+    return {
+      ...(optionalString(repo.id) ? { id: String(repo.id) } : {}),
+      name: optionalString(repo.name ?? repo.label) ?? `Repository ${repositoryIndex + 1}`,
+      ...(optionalString(repo.path ?? repo.root) ? { path: String(repo.path ?? repo.root) } : {}),
+      lanes: rawLanes.map((lane, laneIndex) => {
+        const laneRow = asRecord(lane)
+        const rawSessions = Array.isArray(laneRow.sessions) ? laneRow.sessions : []
+        return {
+          ...(optionalString(laneRow.id) ? { id: String(laneRow.id) } : {}),
+          name: optionalString(laneRow.name ?? laneRow.label ?? laneRow.branch) ?? `Lane ${laneIndex + 1}`,
+          sessions: rawSessions.flatMap((session) => {
+            const item = asRecord(session)
+            const id = optionalString(item.id ?? item.session_id)
+            if (!id) return []
+            return [{
+              id,
+              ...(optionalString(item.title) ? { title: String(item.title) } : {}),
+              ...(optionalString(item.preview) ? { preview: String(item.preview) } : {}),
+              ...(optionalString(item.cwd) ? { cwd: String(item.cwd) } : {}),
+              ...(optionalString(item.model) ? { model: String(item.model) } : {}),
+              ...numberField(item, "updatedAt", "last_active", "updated_at", "started_at"),
+            }]
+          }),
+        }
+      }),
+    }
+  })
+  const paths = Array.isArray(row.paths)
+    ? row.paths.filter((item): item is string => typeof item === "string")
+    : repositories.flatMap((repo) => repo.path ? [repo.path] : [])
+  const rawSessions = Array.isArray(row.sessions) ? row.sessions : []
+  const sessions = rawSessions.flatMap((session) => {
+    const item = asRecord(session)
+    const id = optionalString(item.id ?? item.session_id)
+    if (!id) return []
+    return [{
+      id,
+      ...(optionalString(item.title) ? { title: String(item.title) } : {}),
+      ...(optionalString(item.preview) ? { preview: String(item.preview) } : {}),
+      ...(optionalString(item.cwd) ? { cwd: String(item.cwd) } : {}),
+      ...(optionalString(item.model) ? { model: String(item.model) } : {}),
+      ...numberField(item, "updatedAt", "last_active", "updated_at", "started_at"),
+    }]
+  })
+  return {
+    id: optionalString(row.id ?? row.project_id) ?? `project-${index}`,
+    name: optionalString(row.name ?? row.label ?? row.title) ?? `Project ${index + 1}`,
+    paths,
+    ...(optionalString(row.primary_path ?? row.path) ? { primaryPath: String(row.primary_path ?? row.path) } : {}),
+    ...(repositories.length ? { repositories } : {}),
+    ...(sessions.length ? { sessions } : {}),
+  }
 }
 
 function optionalString(value: unknown): string | undefined {

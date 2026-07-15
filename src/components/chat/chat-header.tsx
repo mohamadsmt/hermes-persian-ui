@@ -3,6 +3,7 @@
 import {
   Boxes,
   GitBranch,
+  History,
   Menu,
   Moon,
   PanelLeft,
@@ -60,6 +61,7 @@ type ChatHeaderProps = {
     theme: string;
     branch: string;
     compress: string;
+    recovery: string;
   };
   onOpenSessions: () => void;
   onOpenArtifacts: () => void;
@@ -69,6 +71,7 @@ type ChatHeaderProps = {
   onFastChange?: (fast: boolean) => Promise<void> | void;
   onBranch: () => Promise<void> | void;
   onCompress: () => Promise<void> | void;
+  onRecovery?: () => void;
 };
 
 export function ChatHeader({
@@ -91,6 +94,7 @@ export function ChatHeader({
   onFastChange,
   onBranch,
   onCompress,
+  onRecovery,
 }: ChatHeaderProps) {
   const { resolvedTheme, setTheme } = useTheme();
   const currentModel =
@@ -236,6 +240,11 @@ export function ChatHeader({
         {capabilities?.compress ? (
           <button type="button" className="icon-button header-wide-action" aria-label={labels.compress} onClick={() => void onCompress()}>
             <Boxes aria-hidden="true" size={19} />
+          </button>
+        ) : null}
+        {onRecovery ? (
+          <button type="button" className="icon-button header-wide-action" aria-label={labels.recovery} onClick={onRecovery} disabled={running}>
+            <History aria-hidden="true" size={19} />
           </button>
         ) : null}
         <button

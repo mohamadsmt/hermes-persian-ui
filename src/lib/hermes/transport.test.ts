@@ -204,6 +204,9 @@ describe("browser transport capabilities and deduplication", () => {
     await expect(transport.sessionList({ profile: "all" })).rejects.toThrow(
       "A concrete Hermes profile is required",
     )
+    await expect(transport.sessionCreate({profile: "all"})).rejects.toThrow(
+      "A concrete Hermes profile is required",
+    )
     expect(socket.sent).toHaveLength(0)
     transport.disconnect()
   })
@@ -429,7 +432,7 @@ describe("browser transport capabilities and deduplication", () => {
       expect.objectContaining({ id: "gpt-5.6-sol", provider: "hermes-api", current: true }),
     ])
 
-    const session = await transport.sessionCreate()
+    const session = await transport.sessionCreate({profile: "default"})
     expect(session.identity.storedId).toMatch(/^http-/)
     await transport.send(session.identity, "سلام")
 
@@ -481,7 +484,7 @@ describe("browser transport capabilities and deduplication", () => {
     const events: Array<{ payload?: unknown; type: string }> = []
     transport.onEvent((event) => events.push(event))
     await transport.connect()
-    const session = await transport.sessionCreate()
+    const session = await transport.sessionCreate({profile: "default"})
 
     const sending = transport.send(session.identity, "ادامه بده")
     await vi.waitFor(() => expect(events.some((event) => event.type === "message.delta")).toBe(true))

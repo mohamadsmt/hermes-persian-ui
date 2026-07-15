@@ -3,16 +3,15 @@ import { once } from "node:events"
 
 import type { BackendSnapshot, UpstreamTarget } from "./backend-manager.js"
 import { redact } from "./security.js"
+import { handleSafeHermesRequest } from "../src/lib/server/safe-bff.js"
 
 type JsonRecord = Record<string, unknown>
 
 const DEFAULT_BODY_LIMIT = 2 * 1024 * 1024
-const FILE_BODY_LIMIT = 50 * 1024 * 1024
 /** A 25 MiB raw recording expands to ~33.4 MiB as a base64 data URL in JSON. */
 export const TRANSCRIBE_BODY_LIMIT = 35 * 1024 * 1024
 const SPEAK_BODY_LIMIT = 256 * 1024
 const SESSION_MUTATION_BODY_LIMIT = 4 * 1024
-const FILE_OPERATIONS = new Set(["read", "download", "upload", "upload-stream", "mkdir"])
 const HTTP_FALLBACK_BASE_PATHS = new Set([
   "v1/capabilities",
   "v1/runs",
@@ -71,6 +70,37 @@ export async function dispatchHermesBff(
       const { restartCount: _restartCount, ...bootstrap } = backend.snapshot()
       writeJson(response, bootstrap.ready ? 200 : 503, bootstrap)
       return true
+    }
+
+    // New workspace surfaces use a single implementation shared with the
+    // App Router handlers. It builds every upstream query server-side and
+    // returns only whitelisted, profile-scoped data.
+    const safeAbort = new AbortController()
+    const onSafeAbort = () => safeAbort.abort()
+    request.once("aborted", onSafeAbort)
+    response.once("close", onSafeAbort)
+    try {
+      if ((request.method ?? "GET").toUpperCase() === "POST" && requestUrl.pathname.startsWith("/api/hermes/automations/")) {
+        // Safe automation controls do not accept browser parameters. Drain a
+        // tiny compatibility body (the UI historically sent `{profile}`) and
+        // reject anything large before performing the upstream mutation.
+        await discardLimitedBody(request, SESSION_MUTATION_BODY_LIMIT)
+      }
+      const safeResponse = await handleSafeHermesRequest({
+        method: (request.method ?? "GET").toUpperCase(),
+        mode: backend.snapshot().mode,
+        range: typeof request.headers.range === "string" ? request.headers.range : null,
+        signal: safeAbort.signal,
+        target: backend.upstream(),
+        url: requestUrl,
+      })
+      if (safeResponse) {
+        await streamResponse(response, safeResponse)
+        return true
+      }
+    } finally {
+      request.off("aborted", onSafeAbort)
+      response.off("close", onSafeAbort)
     }
 
     if (requestUrl.pathname === "/api/hermes/status") {
@@ -227,25 +257,11 @@ export async function dispatchHermesBff(
       return true
     }
 
-    if (requestUrl.pathname === "/api/hermes/files") {
-      await proxyRequest(request, response, backend.upstream(), requestUrl, {
-        methods: ["GET", "DELETE"],
-        upstreamPath: "/api/files",
-      })
-      return true
-    }
-
-    const fileOperation = singlePathSegment(requestUrl.pathname, "/api/hermes/files/")
-    if (fileOperation !== null) {
-      if (!FILE_OPERATIONS.has(fileOperation)) {
-        writeJsonError(response, 404, "Unknown file operation")
-      } else {
-        await proxyRequest(request, response, backend.upstream(), requestUrl, {
-          bodyLimit: FILE_BODY_LIMIT,
-          methods: ["GET", "POST", "DELETE"],
-          upstreamPath: `/api/files/${fileOperation}`,
-        })
-      }
+    // Generic managed-file passthrough used to expose upload/mkdir/delete and
+    // arbitrary absolute paths to browser code. Attachments travel over the
+    // authenticated Hermes transport, so this legacy HTTP surface is closed.
+    if (requestUrl.pathname === "/api/hermes/files" || requestUrl.pathname.startsWith("/api/hermes/files/")) {
+      writeJsonError(response, 404, "Unknown Hermes endpoint")
       return true
     }
 

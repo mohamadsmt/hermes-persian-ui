@@ -10,6 +10,9 @@ export type SessionSummary = {
   storedId: string;
   runtimeId?: string;
   title: string;
+  preview?: string;
+  cwd?: string;
+  gitRepoRoot?: string;
   updatedAt?: string;
   createdAt?: string;
   messageCount?: number;
@@ -27,6 +30,8 @@ export type ChatMessage = {
   status?: "streaming" | "complete" | "interrupted" | "error";
   model?: string;
   reasoning?: string;
+  /** Zero-based ordinal among authoritative durable user rows. */
+  userOrdinal?: number;
 };
 
 export type ReasoningBlock = {
@@ -46,6 +51,9 @@ export type ToolRun = {
   input?: unknown;
   output?: unknown;
   progress?: number;
+  progressText?: string;
+  inlineDiff?: string;
+  durationSeconds?: number;
   artifactIds?: string[];
 };
 

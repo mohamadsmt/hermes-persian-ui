@@ -24,6 +24,7 @@ type ChatUiState = {
   setArtifactRailOpen: (open: boolean) => void;
   setArtifactRailWidth: (width: number) => void;
   addArtifact: (sessionKey: string, artifact: Artifact) => void;
+  clearArtifacts: (sessionKey: string) => void;
   selectArtifact: (sessionKey: string, id: string | null) => void;
   setDraft: (sessionId: string, value: string) => void;
   enqueuePrompt: (sessionId: string, value: string) => void;
@@ -77,6 +78,11 @@ export const useChatUiStore = create<ChatUiState>((set, get) => ({
         artifactRailOpen: true,
       };
     }),
+  clearArtifacts: (sessionKey) =>
+    set((state) => ({
+      artifacts: { ...state.artifacts, [sessionKey]: [] },
+      selectedArtifactIds: { ...state.selectedArtifactIds, [sessionKey]: null },
+    })),
   selectArtifact: (sessionKey, selectedArtifactId) =>
     set((state) => ({
       selectedArtifactIds: { ...state.selectedArtifactIds, [sessionKey]: selectedArtifactId },

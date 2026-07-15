@@ -54,6 +54,13 @@ interface RpcRequest {
   params?: Record<string, unknown>
 }
 
+function findLastUserMessageIndex(messages: FakeMessage[]): number {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.role === "user") return index
+  }
+  return -1
+}
+
 export class FakeHermesGatewayState {
   readonly sessionsByRuntime = new Map<string, FakeSession>()
   readonly sessionsByStored = new Map<string, FakeSession>()
@@ -87,7 +94,7 @@ export class FakeHermesGateway {
   ) {}
 
   start(): void {
-    this.emit("gateway.ready", undefined, { skin: null, desktop_contract: 2 })
+    this.emit("gateway.ready", undefined, { skin: null, desktop_contract: 4 })
     this.socket.on("message", (data) => this.handle(data.toString()))
     this.socket.on("close", () => {
       for (const session of this.state.sessionsByRuntime.values()) session.abort?.abort()
@@ -213,6 +220,21 @@ export class FakeHermesGateway {
         const calls = session.messages.filter((message) => message.role === "assistant").length
         return { result: { calls, input: calls * 12, output: calls * 18, total: calls * 30, context_max: 128_000 } }
       }
+      case "session.context_breakdown": {
+        this.requireRuntimeSession(params)
+        return {
+          result: {
+            total: 2_048,
+            context_max: 128_000,
+            context_percent: 1.6,
+            system_prompt: 512,
+            history: 896,
+            tools: 512,
+            attachments: 64,
+            other: 64,
+          },
+        }
+      }
       case "session.interrupt": {
         const session = this.requireRuntimeSession(params)
         const wasRunning = session.running
@@ -236,6 +258,14 @@ export class FakeHermesGateway {
         const text = stringValue(params.text)
         if (!text) throw new FakeRpcError(4002, "text is required")
         if (session.running) throw new FakeRpcError(4009, "session busy")
+        if (params.truncate_before_user_ordinal !== undefined) {
+          const ordinal = numberValue(params.truncate_before_user_ordinal)
+          const userIndexes = session.messages.flatMap((message, index) => message.role === "user" ? [index] : [])
+          if (ordinal === undefined || !Number.isInteger(ordinal) || ordinal < 0 || ordinal >= userIndexes.length) {
+            throw new FakeRpcError(4018, "target user message is no longer in session history")
+          }
+          session.messages = session.messages.slice(0, userIndexes[ordinal])
+        }
         session.running = true
         session.messages.push(this.message("user", text))
         return { result: { status: "streaming" }, after: () => void this.runPrompt(session, text) }
@@ -283,7 +313,98 @@ export class FakeHermesGateway {
         }
       }
       case "slash.exec": {
-        return { result: { output: `Executed ${stringValue(params.command) || "/help"}` } }
+        const command = stringValue(params.command) || "/help"
+        const output = command === "/skills diff skill-test"
+          ? [
+              "# Pending skill write skill-test:",
+              "",
+              "--- a/SKILL.md",
+              "+++ b/SKILL.md",
+              "@@",
+              "-Review automation output.",
+              "+Review automation output without exposing managed paths.",
+            ].join("\n")
+          : command === "/skills approve skill-test"
+            ? "Approved 1 skills write(s)."
+            : command === "/skills reject skill-test"
+              ? "Rejected pending skills write 'skill-test'."
+              : command === "/memory approve memory-test"
+                ? "Approved 1 memory write(s)."
+                : command === "/memory reject memory-test"
+                  ? "Rejected pending memory write 'memory-test'."
+                  : `Executed ${command}`
+        return { result: { output } }
+      }
+      case "command.dispatch": {
+        const session = this.requireRuntimeSession(params)
+        if (stringValue(params.name) !== "undo") throw new FakeRpcError(4018, "unsupported command")
+        if (session.running) throw new FakeRpcError(4009, "session busy")
+        const userIndex = findLastUserMessageIndex(session.messages)
+        if (userIndex < 0) throw new FakeRpcError(4018, "no user messages to undo")
+        const message = session.messages[userIndex]?.content ?? ""
+        session.messages = session.messages.slice(0, userIndex)
+        return { result: { type: "prefill", message, notice: "Undid 1 turn." } }
+      }
+      case "rollback.list": {
+        this.requireRuntimeSession(params)
+        return {
+          result: {
+            enabled: true,
+            checkpoints: [{ hash: "deadbeefcafefeed", timestamp: "2026-07-15T10:00:00Z", message: "Before last turn" }],
+          },
+        }
+      }
+      case "rollback.diff": {
+        this.requireRuntimeSession(params)
+        return { result: { stat: "1 file changed", diff: "--- a/example.txt\n+++ b/example.txt\n@@\n-before\n+after" } }
+      }
+      case "rollback.restore": {
+        const session = this.requireRuntimeSession(params)
+        if (session.running) throw new FakeRpcError(4009, "session busy")
+        const userIndex = findLastUserMessageIndex(session.messages)
+        if (userIndex >= 0) session.messages = session.messages.slice(0, userIndex)
+        return { result: { success: true, history_removed: userIndex >= 0 ? 2 : 0, history_synced: true } }
+      }
+      case "process.list": {
+        this.requireRuntimeSession(params)
+        return { result: { processes: [] } }
+      }
+      case "delegation.status": {
+        return { result: { active: [], paused: false, max_spawn_depth: 3, max_concurrent_children: 4 } }
+      }
+      case "verification.status": {
+        return {
+          result: {
+            verification: {
+              status: "passed",
+              command: "pnpm test",
+              canonical_command: "pnpm test",
+              scope: "full",
+              exit_code: 0,
+              timestamp: "2026-07-15T10:00:00Z",
+              root: "/test/workspace",
+              output_summary: "80 tests passed",
+            },
+          },
+        }
+      }
+      case "projects.tree": {
+        return {
+          result: {
+            active_id: "project-test",
+            scoped_session_ids: [...this.state.sessionsByStored.keys()],
+            projects: [{
+              id: "project-test",
+              name: "Hermes UI",
+              primary_path: "/test/workspace",
+              paths: ["/test/workspace"],
+              repositories: [{ name: "Hermes UI", root: "/test/workspace", lanes: [] }],
+            }],
+          },
+        }
+      }
+      case "projects.project_sessions": {
+        return { result: { sessions: [...this.state.sessionsByStored.values()].map((session) => this.summary(session)) } }
       }
       case "approval.respond": {
         const session = this.requireRuntimeSession(params)
@@ -578,7 +699,7 @@ export class FakeHermesGateway {
       personality: "",
       running: session.running,
       title: session.title,
-      desktop_contract: 2,
+      desktop_contract: 4,
       version: "0.18.2-test",
       profile_name: "default",
     }

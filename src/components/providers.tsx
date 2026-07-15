@@ -9,6 +9,7 @@ import {useState} from "react";
 
 import type {AppLocale} from "@/i18n/routing";
 
+import {HermesWorkspaceProvider} from "./workspace/workspace-provider";
 import {TooltipProvider} from "./ui/tooltip";
 
 interface ProvidersProps {
@@ -41,7 +42,9 @@ export function Providers({children, locale, messages}: ProvidersProps) {
         storageKey="hermes-ui-theme"
       >
         <QueryClientProvider client={queryClient}>
-          <TooltipProvider delayDuration={450}>{children}</TooltipProvider>
+          <HermesWorkspaceProvider>
+            <TooltipProvider delayDuration={450}>{children}</TooltipProvider>
+          </HermesWorkspaceProvider>
         </QueryClientProvider>
       </ThemeProvider>
     </NextIntlClientProvider>

@@ -4,6 +4,8 @@ import {
   Archive,
   ChartNoAxesColumn,
   CircleX,
+  FileSearch,
+  LoaderCircle,
   MessageSquarePlus,
   MoreHorizontal,
   Pencil,
@@ -11,8 +13,14 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useMemo, useState, type ReactNode } from "react";
 
+import type { SessionSearchHit } from "@/lib/hermes";
+
+import {
+  MAX_SESSION_SEARCH_QUERY,
+  useSessionSearch,
+} from "./session-search";
 import type { SessionSummary } from "./ui-types";
 
 type SessionRailProps = {
@@ -36,6 +44,9 @@ type SessionRailProps = {
     confirmClose: string;
     closeDescription: string;
     renameTitle: string;
+    searching?: string;
+    searchUnavailable?: string;
+    messageMatch?: string;
   };
   canCreate?: boolean;
   canManage?: boolean;
@@ -46,6 +57,13 @@ type SessionRailProps = {
   onDelete: (session: SessionSummary) => Promise<void>;
   onClose?: (session: SessionSummary) => Promise<void>;
   onUsage?: (session: SessionSummary) => Promise<void>;
+  searchProfile?: string;
+  searchEnabled?: boolean;
+  searchDebounceMs?: number;
+  searchLimit?: number;
+  onSearchCapabilityChange?: (support: "available" | "unavailable") => void;
+  onSelectSearchResult?: (result: SessionSearchHit) => void;
+  projectBrowser?: ReactNode;
 };
 
 export function SessionRail({
@@ -64,6 +82,13 @@ export function SessionRail({
   onDelete,
   onClose,
   onUsage,
+  searchProfile,
+  searchEnabled,
+  searchDebounceMs,
+  searchLimit,
+  onSearchCapabilityChange,
+  onSelectSearchResult,
+  projectBrowser,
 }: SessionRailProps) {
   const [query, setQuery] = useState("");
   const [menuId, setMenuId] = useState<string | null>(null);
@@ -71,14 +96,56 @@ export function SessionRail({
   const [deleteTarget, setDeleteTarget] = useState<SessionSummary | null>(null);
   const [closeTarget, setCloseTarget] = useState<SessionSummary | null>(null);
   const [busy, setBusy] = useState(false);
+  const remoteSearch = useSessionSearch({
+    debounceMs: searchDebounceMs,
+    enabled: searchEnabled ?? Boolean(searchProfile && onSelectSearchResult),
+    limit: searchLimit,
+    onCapabilityChange: onSearchCapabilityChange,
+    profile: searchProfile,
+    query,
+  });
 
   const filtered = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase();
     if (!normalized) return sessions;
-    return sessions.filter((session) =>
-      session.title.toLocaleLowerCase().includes(normalized),
-    );
+    return sessions.filter((session) => [
+      session.title,
+      session.model,
+      session.profile,
+      session.preview,
+      session.cwd,
+      session.storedId,
+      session.runtimeId,
+    ].some((value) => value?.toLocaleLowerCase().includes(normalized)));
   }, [query, sessions]);
+
+  const visibleLocalIds = useMemo(() => {
+    const ids = new Set<string>();
+    filtered.forEach((session) => {
+      ids.add(session.storedId);
+      if (session.runtimeId) ids.add(session.runtimeId);
+    });
+    return ids;
+  }, [filtered]);
+
+  const unmatchedRemoteResults = useMemo(
+    () => remoteSearch.results.filter((result) => (
+      !visibleLocalIds.has(result.sessionId) &&
+      (!result.lineageRoot || !visibleLocalIds.has(result.lineageRoot))
+    )),
+    [remoteSearch.results, visibleLocalIds],
+  );
+
+  function selectSearchHit(result: SessionSearchHit) {
+    const local = sessions.find((session) => (
+      session.storedId === result.sessionId ||
+      session.runtimeId === result.sessionId ||
+      session.storedId === result.lineageRoot ||
+      session.runtimeId === result.lineageRoot
+    ));
+    if (local) onSelect(local);
+    else onSelectSearchResult?.(result);
+  }
 
   async function submitRename(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -153,7 +220,8 @@ export function SessionRail({
             <span className="sr-only">{labels.search}</span>
             <input
               value={query}
-              onChange={(event) => setQuery(event.target.value)}
+              maxLength={MAX_SESSION_SEARCH_QUERY}
+              onChange={(event) => setQuery(event.target.value.slice(0, MAX_SESSION_SEARCH_QUERY))}
               placeholder={labels.search}
               data-testid="session-search"
               dir="auto"
@@ -166,10 +234,29 @@ export function SessionRail({
             Array.from({ length: 5 }).map((_, index) => (
               <div className="session-skeleton" key={index} aria-hidden="true" />
             ))
-          ) : filtered.length ? (
-            filtered.map((session) => {
+          ) : projectBrowser || filtered.length || unmatchedRemoteResults.length || remoteSearch.loading || remoteSearch.error ? (
+            <>
+              {!query.trim() && projectBrowser ? (
+                <div className="p-2" data-testid="session-projects">
+                  {projectBrowser}
+                </div>
+              ) : null}
+
+              {!query.trim() && projectBrowser && filtered.length ? (
+                <p className="border-t border-border px-3 pb-1 pt-3 text-xs font-medium text-muted-foreground">
+                  {locale.startsWith("fa") ? "گفت‌وگوهای اخیر" : "Recent conversations"}
+                </p>
+              ) : null}
+
+              {filtered.map((session) => {
               const active = session.storedId === activeSessionId;
               const deletable = active || session.status !== "active";
+              const messageMatch = remoteSearch.results.find((result) => (
+                result.sessionId === session.storedId ||
+                result.sessionId === session.runtimeId ||
+                result.lineageRoot === session.storedId ||
+                result.lineageRoot === session.runtimeId
+              ));
               return (
                 <div
                   className={`session-row ${active ? "session-row--active" : ""}`}
@@ -195,6 +282,15 @@ export function SessionRail({
                         <span>{session.messageCount.toLocaleString(locale)}</span>
                       ) : null}
                     </span>
+                    {messageMatch?.snippet ? (
+                      <span
+                        className="line-clamp-2 text-xs leading-5 text-muted-foreground"
+                        data-testid="session-search-snippet"
+                        dir="auto"
+                      >
+                        {messageMatch.snippet}
+                      </span>
+                    ) : null}
                   </button>
                   {canManage ? (
                     <button
@@ -268,7 +364,51 @@ export function SessionRail({
                   ) : null}
                 </div>
               );
-            })
+              })}
+
+            {unmatchedRemoteResults.length ? (
+              <section
+                aria-label={labels.messageMatch ?? (locale.startsWith("fa") ? "نتیجه در پیام‌ها" : "Matches in messages")}
+                className="mt-2 border-t border-border pt-2"
+                data-testid="session-search-results"
+              >
+                <p className="px-3 py-1 text-xs font-medium text-muted-foreground">
+                  {labels.messageMatch ?? (locale.startsWith("fa") ? "نتیجه در پیام‌ها" : "Matches in messages")}
+                </p>
+                {unmatchedRemoteResults.map((result) => (
+                  <button
+                    className="flex min-h-16 w-full flex-col items-start gap-1 rounded-xl px-3 py-2 text-start hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    data-testid="session-search-result"
+                    key={result.lineageRoot || result.sessionId}
+                    onClick={() => selectSearchHit(result)}
+                    type="button"
+                  >
+                    <span className="flex w-full items-center gap-2 text-xs text-muted-foreground">
+                      <FileSearch aria-hidden="true" size={14} />
+                      {result.model ? <bdi className="technical-inline" dir="ltr">{result.model}</bdi> : null}
+                      {result.role ? <span>{result.role}</span> : null}
+                    </span>
+                    <span className="line-clamp-2 text-sm leading-6" dir="auto">
+                      {result.snippet || result.sessionId}
+                    </span>
+                  </button>
+                ))}
+              </section>
+            ) : null}
+
+            {remoteSearch.loading ? (
+              <div className="flex items-center justify-center gap-2 px-3 py-4 text-xs text-muted-foreground" role="status">
+                <LoaderCircle aria-hidden="true" className="animate-spin motion-reduce:animate-none" size={15} />
+                {labels.searching ?? (locale.startsWith("fa") ? "در حال جست‌وجو…" : "Searching…")}
+              </div>
+            ) : null}
+
+            {remoteSearch.error ? (
+              <p className="px-3 py-2 text-xs text-muted-foreground" role="status">
+                {labels.searchUnavailable ?? (locale.startsWith("fa") ? "جست‌وجوی متن پیام‌ها در دسترس نیست." : "Message search is unavailable.")}
+              </p>
+            ) : null}
+            </>
           ) : (
             <div className="rail-empty">
               <Archive aria-hidden="true" size={24} />

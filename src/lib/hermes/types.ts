@@ -131,6 +131,151 @@ export interface UsageStats {
   total: number
 }
 
+export interface ContextBreakdown {
+  total?: number
+  max?: number
+  percent?: number
+  systemPrompt?: number
+  history?: number
+  tools?: number
+  attachments?: number
+  other?: number
+}
+
+export interface SessionSearchHit {
+  profile: string
+  sessionId: string
+  lineageRoot?: string
+  snippet: string
+  role?: MessageRole
+  source?: string
+  model?: string
+  startedAt?: number
+}
+
+export interface ProjectSessionNode {
+  id: string
+  title?: string
+  preview?: string
+  cwd?: string
+  model?: string
+  updatedAt?: number
+}
+
+export interface ProjectNode {
+  id: string
+  name: string
+  paths: string[]
+  primaryPath?: string
+  repositories?: Array<{
+    id?: string
+    name: string
+    path?: string
+    lanes?: Array<{ id?: string; name: string; sessions: ProjectSessionNode[] }>
+  }>
+  sessions?: ProjectSessionNode[]
+}
+
+export interface ProjectTreePayload {
+  profile: string
+  projects: ProjectNode[]
+  activeId?: string
+  scopedSessionIds: string[]
+}
+
+export interface WorkspaceEntry {
+  name: string
+  path: string
+  isDirectory: boolean
+  size?: number
+  modifiedAt?: number
+  mimeType?: string
+  previewable?: boolean
+}
+
+export interface AutomationJob {
+  id: string
+  profile: string
+  name: string
+  schedule?: string
+  enabled: boolean
+  running: boolean
+  state?: string
+  nextRunAt?: number | string
+  lastRunAt?: number | string
+  lastStatus?: string
+  lastError?: string
+  lastDeliveryError?: string
+  delivery?: string
+}
+
+export interface AutomationRun {
+  id: string
+  jobId: string
+  sessionId?: string
+  startedAt?: number | string
+  finishedAt?: number | string
+  status?: string
+  error?: string
+}
+
+export interface AutomationOutput {
+  id: string
+  name: string
+  createdAt?: number | string
+  size?: number
+  content?: string
+  truncated?: boolean
+}
+
+export interface LearningNode {
+  id: string
+  kind: "memory" | "skill" | (string & {})
+  title: string
+  createdAt?: number | string
+  summary?: string
+  content?: string
+}
+
+export interface PendingWrite {
+  id: string
+  kind: "memory" | "skill"
+  title?: string
+  createdAt?: number | string
+  source?: string
+  reviewable: boolean
+  operations?: Array<{
+    action: "add" | "replace" | "remove" | (string & {})
+    oldText?: string
+    newText?: string
+    target?: string
+  }>
+  warning?: string
+}
+
+export interface RollbackCheckpoint {
+  hash: string
+  timestamp?: string
+  message?: string
+}
+
+export interface RollbackDiff {
+  stat?: string
+  diff: string
+}
+
+export interface RollbackRestoreResult {
+  success: boolean
+  historyRemoved?: number
+  historySynced?: boolean
+  message?: string
+}
+
+export interface SessionUndoResult {
+  message: string
+  notice?: string
+}
+
 export interface ModelOption {
   id: string
   provider: string
@@ -161,15 +306,18 @@ export interface Attachment {
   error?: string
 }
 
-export interface AttachmentInput {
+interface AttachmentInputBase {
   kind: Attachment["kind"]
   name: string
   mimeType: string
   size: number
-  /** A base64 data URL. It is sent directly to Hermes and never persisted by this client. */
-  dataUrl: string
-  path?: string
 }
+
+/** Attachments are either uploaded bytes or a gateway-visible workspace path. */
+export type AttachmentInput = AttachmentInputBase & (
+  | { dataUrl: string; path?: string }
+  | { dataUrl?: string; path: string }
+)
 
 export interface ToolActivity {
   id: string
@@ -251,7 +399,8 @@ export interface HermesEvent<T = unknown> {
 export interface SessionCreateInput {
   cwd?: string
   title?: string
-  profile?: string
+  /** The owning profile is always explicit; create must never inherit runtime state. */
+  profile: string
   model?: string
   provider?: string
   reasoningEffort?: string
@@ -271,7 +420,7 @@ export interface SessionListOptions {
 }
 
 export interface SessionResumeOptions {
-  profile?: string
+  profile: string
   lazy?: boolean
 }
 
@@ -295,9 +444,9 @@ export interface HermesTransport {
   onEvent(listener: (event: HermesEvent) => void): () => void
   onConnectionState(listener: (state: ConnectionState) => void): () => void
 
-  sessionCreate(input?: SessionCreateInput): Promise<SessionSnapshot>
+  sessionCreate(input: SessionCreateInput): Promise<SessionSnapshot>
   sessionList(options: SessionListOptions): Promise<SessionSummary[]>
-  sessionResume(storedId: string, options?: SessionResumeOptions): Promise<SessionSnapshot>
+  sessionResume(storedId: string, options: SessionResumeOptions): Promise<SessionSnapshot>
   sessionMessages(storedId: string, profile: string): Promise<SessionMessageHistory>
   sessionHistory(session: SessionIdentity | string): Promise<Message[]>
   sessionRename(session: SessionIdentity | string, title: string, profile: string): Promise<void>
@@ -306,6 +455,12 @@ export interface HermesTransport {
   sessionBranch(session: SessionIdentity | string, name?: string): Promise<SessionSnapshot>
   sessionCompress(session: SessionIdentity | string, focusTopic?: string): Promise<Message[]>
   sessionUsage(session: SessionIdentity | string): Promise<UsageStats>
+  sessionContextBreakdown(session: SessionIdentity | string): Promise<ContextBreakdown>
+  sessionUndo(session: SessionIdentity | string): Promise<SessionUndoResult>
+  rollbackList(session: SessionIdentity | string): Promise<RollbackCheckpoint[]>
+  rollbackDiff(session: SessionIdentity | string, hash: string): Promise<RollbackDiff>
+  rollbackRestore(session: SessionIdentity | string, hash: string): Promise<RollbackRestoreResult>
+  projects(profile: string): Promise<ProjectTreePayload>
 
   send(session: SessionIdentity | string, text: string, options?: SendOptions): Promise<void>
   stop(session: SessionIdentity | string): Promise<void>

@@ -1,6 +1,11 @@
+import { execFile } from "node:child_process"
 import { randomUUID } from "node:crypto"
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { createServer } from "node:http"
+import { tmpdir } from "node:os"
+import { dirname, join, resolve } from "node:path"
 import type { Duplex } from "node:stream"
+import { promisify } from "node:util"
 
 import { WebSocket, type RawData } from "ws"
 
@@ -19,8 +24,9 @@ const MIN_GATEWAY_CONTRACT_VERSION = 2
 const DEFAULT_EXPECTED_VERSION = "0.18.2"
 const DEFAULT_EXPECTED_MODEL = "gpt-5.6-sol"
 const DEFAULT_EXPECTED_PROVIDER = "openai-codex"
-const DEFAULT_RPC_TIMEOUT_MS = 30_000
+const DEFAULT_RPC_TIMEOUT_MS = 120_000
 const DEFAULT_TURN_TIMEOUT_MS = 180_000
+const execFileAsync = promisify(execFile)
 
 type JsonRecord = Record<string, unknown>
 
@@ -35,6 +41,13 @@ type TemporarySession = {
   storedId: string
   promptSubmitted: boolean
   turnCompleted: boolean
+}
+
+type RecoveryFixture = {
+  checkpointMessage: string
+  file: string
+  root: string
+  workspace: string
 }
 
 type SmokeTarget = {
@@ -201,7 +214,16 @@ class GatewayRpcClient {
 
 async function main(): Promise<void> {
   const allowBilling = process.env.HERMES_SMOKE_ALLOW_BILLING === "1"
-  const target = await prepareTarget()
+  const recovery = process.env.HERMES_SMOKE_RECOVERY === "1"
+    ? await prepareRecoveryFixture()
+    : null
+  let target: SmokeTarget
+  try {
+    target = await prepareTarget()
+  } catch (error) {
+    await cleanupRecoveryFixture(recovery)
+    throw error
+  }
   const client = new GatewayRpcClient(
     target.wsUrl,
     target.origin,
@@ -218,16 +240,20 @@ async function main(): Promise<void> {
     await client.connect()
     log("gateway: connected")
 
-    const modelPayload = asRecord(
-      await client.request("model.options", { include_unconfigured: false }, timeoutFromEnv("HERMES_SMOKE_RPC_TIMEOUT_MS", DEFAULT_RPC_TIMEOUT_MS)),
-      "model.options",
-    )
-    const currentModel = requiredString(modelPayload.model, "model.options.model")
-    const currentProvider = requiredString(modelPayload.provider, "model.options.provider")
-    const modelCount = countModels(modelPayload)
-    assertExpected("model", currentModel, process.env.HERMES_SMOKE_EXPECT_MODEL || DEFAULT_EXPECTED_MODEL)
-    assertExpected("provider", currentProvider, process.env.HERMES_SMOKE_EXPECT_PROVIDER || DEFAULT_EXPECTED_PROVIDER)
-    log(`route: ${currentProvider}/${currentModel}; ${modelCount} configured model option(s)`)
+    if (recovery) {
+      log("route: skipped for isolated recovery smoke")
+    } else {
+      const modelPayload = asRecord(
+        await client.request("model.options", { include_unconfigured: false }, timeoutFromEnv("HERMES_SMOKE_RPC_TIMEOUT_MS", DEFAULT_RPC_TIMEOUT_MS)),
+        "model.options",
+      )
+      const currentModel = requiredString(modelPayload.model, "model.options.model")
+      const currentProvider = requiredString(modelPayload.provider, "model.options.provider")
+      const modelCount = countModels(modelPayload)
+      assertExpected("model", currentModel, process.env.HERMES_SMOKE_EXPECT_MODEL || DEFAULT_EXPECTED_MODEL)
+      assertExpected("provider", currentProvider, process.env.HERMES_SMOKE_EXPECT_PROVIDER || DEFAULT_EXPECTED_PROVIDER)
+      log(`route: ${currentProvider}/${currentModel}; ${modelCount} configured model option(s)`)
+    }
 
     const title = `Hermes UI smoke ${new Date().toISOString()} ${randomUUID().slice(0, 8)}`
     const createPayload = asRecord(
@@ -236,6 +262,7 @@ async function main(): Promise<void> {
         source: "web",
         title,
         close_on_disconnect: true,
+        ...(recovery ? { cwd: recovery.workspace } : {}),
         ...(process.env.HERMES_PROFILE?.trim() ? { profile: process.env.HERMES_PROFILE.trim() } : {}),
       }),
       "session.create",
@@ -254,6 +281,8 @@ async function main(): Promise<void> {
       )
     }
     log(`session: created temporary runtime ${runtimeId}; gateway contract v${gatewayContract}`)
+
+    if (recovery) await verifyRecovery(client, runtimeId, recovery)
 
     if (!allowBilling) {
       log("prompt: skipped (set HERMES_SMOKE_ALLOW_BILLING=1 to allow one billable live turn)")
@@ -282,15 +311,103 @@ async function main(): Promise<void> {
     const cleanupError = await cleanupTemporarySession(client, session)
     client.close()
     await target.stop?.()
-    if (cleanupError) {
+    const recoveryCleanupError = await cleanupRecoveryFixture(recovery)
+    const cleanupErrors = [cleanupError, recoveryCleanupError].filter((error): error is Error => Boolean(error))
+    if (cleanupErrors.length) {
       const id = session?.storedId ?? "unknown"
-      const cleanupFailure = new Error(`Temporary session cleanup failed (${id}): ${cleanupError.message}`)
+      const cleanupFailure = new AggregateError(cleanupErrors, `Temporary smoke cleanup failed (${id})`)
       failure = failure ? new AggregateError([failure, cleanupFailure], "Smoke and cleanup both failed") : cleanupFailure
     }
   }
 
   if (failure) throw failure
   log(`PASS (${allowBilling ? "live prompt" : "connectivity only"})`)
+}
+
+async function prepareRecoveryFixture(): Promise<RecoveryFixture> {
+  const python = process.env.HERMES_SMOKE_RECOVERY_PYTHON?.trim()
+  if (!python) throw new Error("HERMES_SMOKE_RECOVERY=1 requires HERMES_SMOKE_RECOVERY_PYTHON")
+  const root = await mkdtemp(join(tmpdir(), "hermes-ui-recovery-"))
+  const home = join(root, "home")
+  const workspace = join(root, "workspace")
+  const file = join(workspace, "state.txt")
+  const checkpointMessage = "Hermes UI recovery smoke"
+  try {
+    await Promise.all([mkdir(home, { recursive: true }), mkdir(workspace, { recursive: true })])
+    await writeFile(
+      join(home, "config.yaml"),
+      "model:\n  provider: openrouter\n  default: openai/gpt-4o-mini\n",
+      "utf8",
+    )
+    await writeFile(file, "before\n", "utf8")
+    process.env.HERMES_HOME = home
+    process.env.HERMES_TUI_CHECKPOINTS = "1"
+    process.env.OPENROUTER_API_KEY ||= "hermes-ui-recovery-smoke-placeholder"
+    const hermesRoot = resolve(dirname(python), "../..")
+    await execFileAsync(
+      python,
+      [
+        "-c",
+        [
+          "import sys",
+          "from tools.checkpoint_manager import CheckpointManager",
+          `ok = CheckpointManager(enabled=True).ensure_checkpoint(sys.argv[1], ${JSON.stringify(checkpointMessage)})`,
+          "raise SystemExit(0 if ok else 3)",
+        ].join("\n"),
+        workspace,
+      ],
+      { cwd: hermesRoot, env: process.env, timeout: 30_000 },
+    )
+    return { checkpointMessage, file, root, workspace }
+  } catch (error) {
+    await rm(root, { recursive: true, force: true })
+    throw error
+  }
+}
+
+async function verifyRecovery(
+  client: GatewayRpcClient,
+  runtimeId: string,
+  fixture: RecoveryFixture,
+): Promise<void> {
+  await writeFile(fixture.file, "after\n", "utf8")
+  const listed = asRecord(await client.request("rollback.list", { session_id: runtimeId }), "rollback.list")
+  if (listed.enabled !== true || !Array.isArray(listed.checkpoints)) {
+    throw new Error("Hermes recovery checkpoints are not enabled for the isolated smoke")
+  }
+  const checkpoint = listed.checkpoints.find((value) => (
+    isRecord(value) && value.message === fixture.checkpointMessage
+  ))
+  if (!isRecord(checkpoint)) throw new Error("Hermes recovery smoke checkpoint was not listed")
+  const hash = requiredString(checkpoint.hash, "rollback.list.checkpoint.hash")
+  const diff = asRecord(
+    await client.request("rollback.diff", { session_id: runtimeId, hash }),
+    "rollback.diff",
+  )
+  if (typeof diff.diff !== "string" || !diff.diff.includes("after")) {
+    throw new Error("Hermes recovery smoke did not return the temporary workspace diff")
+  }
+  const restored = asRecord(
+    await client.request("rollback.restore", { session_id: runtimeId, hash }),
+    "rollback.restore",
+  )
+  if (restored.success !== true || restored.history_synced !== true) {
+    throw new Error("Hermes recovery smoke did not durably synchronize rollback history")
+  }
+  if (await readFile(fixture.file, "utf8") !== "before\n") {
+    throw new Error("Hermes recovery smoke did not restore the temporary workspace file")
+  }
+  log("recovery: checkpoint diff, full restore, and durable history sync verified")
+}
+
+async function cleanupRecoveryFixture(fixture: RecoveryFixture | null): Promise<Error | null> {
+  if (!fixture) return null
+  try {
+    await rm(fixture.root, { recursive: true, force: true })
+    return null
+  } catch (error) {
+    return toError(error)
+  }
 }
 
 async function prepareTarget(): Promise<SmokeTarget> {

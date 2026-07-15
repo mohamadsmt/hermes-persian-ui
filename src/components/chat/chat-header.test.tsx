@@ -26,6 +26,7 @@ const labels = {
   theme: "Theme",
   branch: "Branch",
   compress: "Compress",
+  recovery: "Recovery",
 };
 
 const models = [

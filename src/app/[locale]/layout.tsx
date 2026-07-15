@@ -8,9 +8,10 @@ import type {Metadata, Viewport} from "next";
 import {hasLocale} from "next-intl";
 import {getMessages, getTranslations, setRequestLocale} from "next-intl/server";
 import {notFound} from "next/navigation";
-import type {ReactNode} from "react";
+import {Suspense, type ReactNode} from "react";
 
 import {Providers} from "@/components/providers";
+import {WorkspaceShell} from "@/components/workspace/workspace-shell";
 import {getLocaleDirection} from "@/i18n/locale";
 import {routing, type AppLocale} from "@/i18n/routing";
 
@@ -73,10 +74,11 @@ export default async function LocaleLayout({children, params}: LocaleLayoutProps
           {translations("skipToContent")}
         </a>
         <Providers locale={locale} messages={messages}>
-          {children}
+          <Suspense fallback={null}>
+            <WorkspaceShell>{children}</WorkspaceShell>
+          </Suspense>
         </Providers>
       </body>
     </html>
   );
 }
-

@@ -1,8 +1,117 @@
 import type { Page } from "@playwright/test";
 
-import { expect, test } from "../fixtures/hermes-app";
+import {
+  expect,
+  test,
+  TEST_SCENARIOS,
+  type HermesApp,
+} from "../fixtures/hermes-app";
 
 const FIXED_VISUAL_TIME = new Date("2026-07-13T13:30:00.000Z");
+
+type WorkspaceModule = "activity" | "automations" | "knowledge";
+
+const WORKSPACE_MODULE_TITLES = {
+  activity: {en: "Activity", fa: "فعالیت‌ها"},
+  automations: {en: "Automations", fa: "خودکارسازی‌ها"},
+  knowledge: {en: "Knowledge", fa: "دانش"},
+} as const;
+
+async function settleVisualPage(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    await document.fonts.ready;
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+    );
+  });
+}
+
+async function openWorkspaceModule(
+  page: Page,
+  locale: "en" | "fa",
+  workspaceModule: WorkspaceModule,
+): Promise<void> {
+  await page.locator(`a[href="/${locale}/${workspaceModule}"]`).click();
+  await expect(page).toHaveURL(new RegExp(`/${locale}/${workspaceModule}/?$`, "u"));
+  await expect(
+    page.getByRole("heading", {
+      name: WORKSPACE_MODULE_TITLES[workspaceModule][locale],
+      exact: true,
+    }),
+  ).toBeVisible();
+}
+
+async function prepareWorkspaceActivity(
+  page: Page,
+  app: HermesApp,
+  locale: "en" | "fa",
+): Promise<void> {
+  await app.open(locale);
+  await app.ensureSession();
+  // Re-enter through the canonical profile-owned URL so Activity always
+  // starts from the same durable resume state as a returning workspace.
+  await page.reload();
+  await expect(app.shell).toBeVisible();
+  await expect(app.connectionStatus).toHaveText(/^(?:متصل|Connected)$/iu, {timeout: 15_000});
+  await expect(app.composer).toBeEnabled();
+  if ((page.viewportSize()?.width ?? 0) <= 480) {
+    const previousUserMessageCount = await app.messages("user").count();
+    await app.composer.fill(TEST_SCENARIOS.tool);
+    // The fixed mobile workspace nav shares the bottom edge with the composer.
+    // Keyboard submission keeps this visual setup independent of pointer overlap.
+    await app.composer.press("Enter");
+    await expect(app.messages("user")).toHaveCount(previousUserMessageCount + 1);
+  } else {
+    await app.sendScenario("tool");
+  }
+  await expect(page.getByTestId("tool-card").last()).toHaveAttribute("data-status", "complete");
+  await openWorkspaceModule(page, locale, "activity");
+  await expect(page.getByText("terminal", {exact: true}).first()).toBeVisible();
+}
+
+async function prepareWorkspaceAutomations(
+  page: Page,
+  app: HermesApp,
+  locale: "en" | "fa",
+): Promise<void> {
+  await app.open(locale);
+  const listResponse = page.waitForResponse((response) =>
+    /\/api\/hermes\/automations\?profile=/u.test(response.url()),
+  );
+  await openWorkspaceModule(page, locale, "automations");
+  expect((await listResponse).ok()).toBe(true);
+  await expect(page.getByText("Workspace daily brief", {exact: true})).toBeVisible();
+
+  const runsResponse = page.waitForResponse((response) =>
+    /\/api\/hermes\/automations\/workspace-daily\/runs\?profile=/u.test(response.url()),
+  );
+  const outputsResponse = page.waitForResponse((response) =>
+    /\/api\/hermes\/automations\/workspace-daily\/outputs\?profile=/u.test(response.url()),
+  );
+  await page.getByRole("button", {name: locale === "fa" ? "جزئیات" : "Details"}).click();
+  expect((await runsResponse).ok()).toBe(true);
+  expect((await outputsResponse).ok()).toBe(true);
+  await expect(page.getByText("2026-07-15.md", {exact: true})).toBeVisible();
+}
+
+async function prepareWorkspaceKnowledge(
+  page: Page,
+  app: HermesApp,
+  locale: "en" | "fa",
+): Promise<void> {
+  await app.open(locale);
+  const timelineResponse = page.waitForResponse((response) =>
+    /\/api\/hermes\/learning\/timeline\?profile=/u.test(response.url()),
+  );
+  const pendingResponse = page.waitForResponse((response) =>
+    /\/api\/hermes\/learning\/pending\?profile=/u.test(response.url()),
+  );
+  await openWorkspaceModule(page, locale, "knowledge");
+  expect((await timelineResponse).ok()).toBe(true);
+  expect((await pendingResponse).ok()).toBe(true);
+  await expect(page.getByText("Workspace conventions", {exact: true})).toBeVisible();
+  await expect(page.getByText("memory-test", {exact: true})).toBeVisible();
+}
 
 async function waitForSyntaxHighlight(page: Page): Promise<void> {
   await expect
@@ -112,3 +221,39 @@ test("mobile RTL composer and technical content @visual", async ({ app, page }, 
     fullPage: true,
   });
 });
+
+for (const workspaceModule of ["activity", "automations", "knowledge"] as const) {
+  test(`desktop Persian ${workspaceModule} workspace @visual`, async ({app, page}, testInfo) => {
+    test.skip(testInfo.project.name !== "chromium", "desktop workspace baseline");
+    await page.clock.setFixedTime(FIXED_VISUAL_TIME);
+
+    if (workspaceModule === "activity") await prepareWorkspaceActivity(page, app, "fa");
+    if (workspaceModule === "automations") await prepareWorkspaceAutomations(page, app, "fa");
+    if (workspaceModule === "knowledge") await prepareWorkspaceKnowledge(page, app, "fa");
+
+    await app.expectNoPageOverflow();
+    await settleVisualPage(page);
+    await expect(page).toHaveScreenshot(`workspace-${workspaceModule}-fa-desktop.png`, {
+      animations: "disabled",
+      caret: "hide",
+      fullPage: true,
+    });
+  });
+
+  test(`mobile English ${workspaceModule} workspace @visual`, async ({app, page}, testInfo) => {
+    test.skip(testInfo.project.name !== "mobile", "mobile workspace baseline");
+    await page.clock.setFixedTime(FIXED_VISUAL_TIME);
+
+    if (workspaceModule === "activity") await prepareWorkspaceActivity(page, app, "en");
+    if (workspaceModule === "automations") await prepareWorkspaceAutomations(page, app, "en");
+    if (workspaceModule === "knowledge") await prepareWorkspaceKnowledge(page, app, "en");
+
+    await app.expectNoPageOverflow();
+    await settleVisualPage(page);
+    await expect(page).toHaveScreenshot(`workspace-${workspaceModule}-en-mobile.png`, {
+      animations: "disabled",
+      caret: "hide",
+      fullPage: true,
+    });
+  });
+}
