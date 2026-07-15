@@ -52,6 +52,25 @@ export interface ProjectSessionBrowserProps {
   }>;
 }
 
+export function sessionsOutsideRenderedProjects(
+  payload: ProjectTreePayload | null | undefined,
+  sessions: ProjectBrowserSession[],
+): ProjectBrowserSession[] {
+  if (!payload?.projects.length) return [];
+  const rendered = new Set<string>();
+  payload.projects.forEach((project) => {
+    project.sessions?.forEach((session) => rendered.add(session.id));
+    project.repositories?.forEach((repository) => {
+      repository.lanes?.forEach((lane) => {
+        lane.sessions.forEach((session) => rendered.add(session.id));
+      });
+    });
+  });
+  return sessions.filter((session) => (
+    !rendered.has(session.storedId) && (!session.runtimeId || !rendered.has(session.runtimeId))
+  ));
+}
+
 export function buildProjectBrowserGroups(
   payload: ProjectTreePayload | null | undefined,
   fallbackSessions: ProjectBrowserSession[] = [],
@@ -59,25 +78,47 @@ export function buildProjectBrowserGroups(
   if (payload?.projects.length) {
     return payload.projects.map((project) => {
       const directSessions = uniqueProjectSessions(project.sessions ?? []);
-      const repositories = (project.repositories ?? []).map((repository, repositoryIndex) => ({
+      let repositories: ProjectBrowserRepository[] = (project.repositories ?? []).map((repository, repositoryIndex) => ({
         id: repository.id || `${project.id}:repo:${repositoryIndex}`,
         name: repository.name,
         path: repository.path,
-        lanes: (repository.lanes?.length ? repository.lanes : [{ name: "Sessions", sessions: [] }])
-          .map((lane, laneIndex) => ({
-            id: lane.id || `${project.id}:repo:${repositoryIndex}:lane:${laneIndex}`,
-            name: lane.name,
-            sessions: uniqueProjectSessions(lane.sessions),
-          })),
+        lanes: (repository.lanes ?? []).map((lane, laneIndex) => ({
+          id: lane.id || `${project.id}:repo:${repositoryIndex}:lane:${laneIndex}`,
+          name: lane.name,
+          sessions: uniqueProjectSessions(lane.sessions),
+        })),
       }));
 
-      if (directSessions.length) {
-        repositories.push({
-          id: `${project.id}:direct`,
-          name: project.name,
-          path: project.primaryPath ?? project.paths[0],
-          lanes: [{ id: `${project.id}:direct:sessions`, name: "Sessions", sessions: directSessions }],
-        });
+      const assigned = new Set(repositories.flatMap((repository) => (
+        repository.lanes.flatMap((lane) => lane.sessions.map((session) => session.id))
+      )));
+      const unassignedDirect = directSessions.filter((session) => !assigned.has(session.id));
+      if (unassignedDirect.length) {
+        const soleRepository = repositories.length === 1 ? repositories[0] : undefined;
+        const soleRepositoryIsEmpty = soleRepository?.lanes.every((lane) => lane.sessions.length === 0) ?? false;
+        if (soleRepository && soleRepositoryIsEmpty) {
+          const firstLane = soleRepository.lanes[0];
+          soleRepository.lanes = firstLane
+            ? [
+                {...firstLane, sessions: unassignedDirect},
+                ...soleRepository.lanes.slice(1),
+              ]
+            : [{
+                id: `${project.id}:direct:sessions`,
+                name: "Sessions",
+                sessions: unassignedDirect,
+              }];
+        } else {
+          repositories.push({
+            id: `${project.id}:direct`,
+            name: project.name,
+            path: project.primaryPath ?? project.paths[0],
+            lanes: [{ id: `${project.id}:direct:sessions`, name: "Sessions", sessions: unassignedDirect }],
+          });
+          repositories = repositories.filter((repository) => (
+            repository.lanes.some((lane) => lane.sessions.length > 0)
+          ));
+        }
       }
 
       return {
@@ -86,7 +127,9 @@ export function buildProjectBrowserGroups(
         path: project.primaryPath ?? project.paths[0],
         repositories,
       };
-    });
+    }).filter((project) => project.repositories.some((repository) => (
+      repository.lanes.some((lane) => lane.sessions.length > 0)
+    )));
   }
 
   const grouped = new Map<string, ProjectBrowserSession[]>();
@@ -147,13 +190,27 @@ export function ProjectSessionBrowser({
   }
 
   return (
-    <nav aria-label={copy.projects} className="grid gap-2" data-testid="project-browser">
+    <nav
+      aria-label={copy.projects}
+      className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2 overflow-hidden"
+      data-testid="project-browser"
+    >
       {groups.map((project) => (
-        <details className="rounded-xl border border-border bg-surface" key={project.id} open>
-          <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2 px-3 py-2 marker:hidden">
+        <details
+          className="min-w-0 max-w-full overflow-hidden rounded-xl border border-border bg-surface"
+          key={project.id}
+          open
+        >
+          <summary className="flex min-h-11 min-w-0 cursor-pointer list-none items-center gap-2 px-3 py-2 marker:hidden">
             <FolderGit2 aria-hidden="true" className="text-primary" size={17} />
-            <span className="min-w-0 flex-1 truncate text-sm font-semibold" dir="auto">
-              {project.name === "Ungrouped" ? copy.ungrouped : project.name}
+            <span className="w-0 min-w-0 flex-1 overflow-hidden">
+              <bdi
+                className="block w-full truncate text-sm font-semibold"
+                data-testid="project-session-project-title"
+                dir="auto"
+              >
+                {project.name === "Ungrouped" ? copy.ungrouped : project.name}
+              </bdi>
             </span>
             {onSelectProject ? (
               <button
@@ -169,45 +226,61 @@ export function ProjectSessionBrowser({
             ) : null}
           </summary>
           {project.path ? (
-            <bdi className="block truncate border-t border-border px-3 py-1.5 text-[0.6875rem] text-muted-foreground" dir="ltr">
+            <bdi className="block w-full min-w-0 truncate border-t border-border px-3 py-1.5 text-[0.6875rem] text-muted-foreground" dir="ltr">
               {project.path}
             </bdi>
           ) : null}
 
-          <div className="grid gap-3 border-t border-border p-2">
+          <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-3 border-t border-border p-2">
             {project.repositories.map((repository) => (
-              <section aria-label={`${copy.repository}: ${repository.name}`} key={repository.id}>
+              <section
+                aria-label={`${copy.repository}: ${repository.name}`}
+                className="min-w-0"
+                key={repository.id}
+              >
                 {project.repositories.length > 1 ? (
                   <p className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium text-muted-foreground">
                     <FolderGit2 aria-hidden="true" size={13} />
-                    <span className="truncate" dir="auto">{repository.name}</span>
+                    <bdi className="min-w-0 truncate" dir="auto">{repository.name}</bdi>
                   </p>
                 ) : null}
                 {repository.lanes.map((lane) => (
-                  <div className="mt-1" key={lane.id}>
-                    <p className="flex items-center gap-1.5 px-2 py-1 text-[0.6875rem] text-muted-foreground">
+                  <div className="mt-1 min-w-0" key={lane.id}>
+                    <p className="flex min-w-0 items-center gap-1.5 px-2 py-1 text-[0.6875rem] text-muted-foreground">
                       <GitBranch aria-hidden="true" size={12} />
-                      <span dir="auto">{lane.name === "Sessions" ? copy.sessions : lane.name}</span>
+                      <bdi className="min-w-0 truncate" dir="auto">
+                        {lane.name === "Sessions" ? copy.sessions : lane.name}
+                      </bdi>
                     </p>
-                    <div className="grid gap-0.5">
+                    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-0.5">
                       {lane.sessions.map((session) => {
                         const active = session.id === activeSessionId;
                         return (
                           <button
                             aria-current={active ? "page" : undefined}
-                            className={`flex min-h-11 min-w-0 items-center gap-2 rounded-lg px-2 py-1.5 text-start text-sm hover:bg-muted ${active ? "bg-primary/10 text-primary" : ""}`}
+                            className={`flex min-h-11 w-full min-w-0 max-w-full items-center gap-2 overflow-hidden rounded-lg px-2 py-1.5 text-start text-sm hover:bg-muted ${active ? "bg-primary/10 text-primary" : ""}`}
                             data-session-id={session.id}
                             key={session.id}
                             onClick={() => onSelectSession(session.id)}
                             type="button"
                           >
                             <MessageSquare aria-hidden="true" className="shrink-0" size={14} />
-                            <span className="min-w-0 flex-1">
-                              <span className="block truncate" dir="auto">{session.title || session.id}</span>
+                            <span className="w-0 min-w-0 flex-1 overflow-hidden">
+                              <bdi
+                                className="block w-full truncate"
+                                data-testid="project-session-title"
+                                dir="auto"
+                              >
+                                {session.title || session.id}
+                              </bdi>
                               {session.preview ? (
-                                <span className="line-clamp-1 block text-xs text-muted-foreground" dir="auto">
+                                <bdi
+                                  className="line-clamp-1 block w-full overflow-hidden text-xs text-muted-foreground"
+                                  data-testid="project-session-preview"
+                                  dir="auto"
+                                >
                                   {session.preview}
-                                </span>
+                                </bdi>
                               ) : null}
                             </span>
                           </button>

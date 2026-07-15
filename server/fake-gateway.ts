@@ -389,6 +389,9 @@ export class FakeHermesGateway {
         }
       }
       case "projects.tree": {
+        const previewSessions = [...this.state.sessionsByStored.values()]
+          .slice(0, 3)
+          .map((session) => this.summary(session))
         return {
           result: {
             active_id: "project-test",
@@ -399,6 +402,7 @@ export class FakeHermesGateway {
               primary_path: "/test/workspace",
               paths: ["/test/workspace"],
               repositories: [{ name: "Hermes UI", root: "/test/workspace", lanes: [] }],
+              previewSessions,
             }],
           },
         }

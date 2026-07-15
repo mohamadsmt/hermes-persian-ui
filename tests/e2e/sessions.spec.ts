@@ -123,7 +123,7 @@ test("renames, searches, and explicitly confirms deletion", async ({ app, page }
   await expect(session).toContainText("جلسهٔ آزمون پایدار");
 
   await page.getByTestId("session-search").fill("پایدار");
-  await expect(page.getByTestId("session-item")).toHaveCount(1);
+  await expect(page.locator('[data-testid="session-item"]:visible')).toHaveCount(1);
   await page.getByTestId("session-search").fill("");
 
   await session.getByTestId("session-actions").click();

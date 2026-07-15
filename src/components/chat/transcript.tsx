@@ -141,7 +141,10 @@ export function Transcript({
 
   const handleExpandedChange = useCallback((source: Element) => {
     const virtualItem = source.closest(".transcript-virtual-item") as HTMLElement | null;
-    const wasFollowingLatest = followLatestRef.current;
+    const viewport = viewportRef.current;
+    const wasFollowingLatest = followLatestRef.current || Boolean(
+      viewport && viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 96,
+    );
     const userScrollGeneration = userScrollGenerationRef.current;
     requestAnimationFrame(() => {
       if (virtualItem) virtualizer.measureElement(virtualItem);

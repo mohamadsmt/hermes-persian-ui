@@ -42,7 +42,7 @@ import { CommandPalette } from "./command-palette";
 import { Composer } from "./composer";
 import { NewSessionDialog, type NewSessionSubmission } from "./new-session-dialog";
 import type { PromptResponse } from "./prompt-card";
-import { ProjectSessionBrowser } from "./project-session-browser";
+import { ProjectSessionBrowser, sessionsOutsideRenderedProjects } from "./project-session-browser";
 import { SessionRail } from "./session-rail";
 import { RecoveryDialog } from "./recovery-dialog";
 import { SessionActionDialog } from "./session-action-dialog";
@@ -963,6 +963,10 @@ export function ChatShell({
     enabled: connection === "connected",
   });
 
+  const projectTreeEnabled =
+    connection === "connected" &&
+    capabilities?.gateway === true &&
+    (gatewayContract ?? 0) >= 4;
   const projectsQuery = useQuery<ProjectTreePayload | null>({
     queryKey: ["hermes-projects", activeProfile, gatewayContract],
     queryFn: async () => {
@@ -977,10 +981,7 @@ export function ChatShell({
         return null;
       }
     },
-    enabled:
-      connection === "connected" &&
-      capabilities?.gateway === true &&
-      (gatewayContract ?? 0) >= 4,
+    enabled: projectTreeEnabled,
   });
 
   useEffect(() => {
@@ -1014,6 +1015,10 @@ export function ChatShell({
   const models = modelsQuery.data ?? [];
   const commands = commandsQuery.data ?? [];
   const projectPayload = projectsQuery.data ?? null;
+  const projectRecentSessions = useMemo(
+    () => sessionsOutsideRenderedProjects(projectPayload, sessions),
+    [projectPayload, sessions],
+  );
   const dialogProfiles = useMemo(
     () => [...new Set([activeProfile, ...profiles])],
     [activeProfile, profiles],
@@ -1911,7 +1916,7 @@ export function ChatShell({
         sessions={sessions}
         activeSessionId={identity?.storedId ?? activeStoredId}
         locale={locale}
-        loading={sessionsQuery.isLoading || loadingSession}
+        loading={sessionsQuery.isLoading || loadingSession || (projectTreeEnabled && projectsQuery.isLoading)}
         mobileOpen={openMobileRail === "sessions"}
         labels={{
           title: tSessions("title"),
@@ -1938,6 +1943,7 @@ export function ChatShell({
             payload={projectPayload}
           />
         )}
+        projectRecentSessions={projectRecentSessions}
         canCreate={gatewaySessionControls}
         canManage={gatewaySessionControls}
         onCloseMobile={() => setMobileRail(null)}

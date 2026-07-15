@@ -67,6 +67,42 @@ function renderPanel({
 afterEach(cleanup);
 
 describe("KnowledgePanel", () => {
+  it("keeps long LTR timeline titles in a zero-basis flex track under RTL", async () => {
+    const longTitle = "iran-gold-fx-market-analysis-with-a-long-unbroken-technical-name";
+    const client = api();
+    vi.mocked(client.timeline).mockResolvedValue([
+      {id: "timeline-long", kind: "skill", title: longTitle},
+    ]);
+
+    render(
+      <NextIntlClientProvider locale="en" messages={en}>
+        <div dir="rtl">
+          <KnowledgePanel
+            activeSessionId="session-1"
+            api={client}
+            canReview
+            executeCommand={vi.fn()}
+            profile="default"
+          />
+        </div>
+      </NextIntlClientProvider>,
+    );
+
+    const title = await screen.findByTestId("knowledge-timeline-title");
+    const copyTrack = title.parentElement;
+    const row = screen.getByTestId("knowledge-timeline-row");
+
+    expect(title).toHaveTextContent(longTitle);
+    expect(title).toHaveClass("w-full", "truncate");
+    expect(copyTrack).toHaveClass(
+      "min-w-0",
+      "flex-1",
+      "overflow-hidden",
+      "rtl:w-0",
+    );
+    expect(row).toHaveClass("flex");
+  });
+
   it("shows complete memory operations and remains read-only without a same-profile session", async () => {
     renderPanel({activeSessionId: null});
     const heading = await screen.findByRole("heading", {name: "Remember profile boundary"});

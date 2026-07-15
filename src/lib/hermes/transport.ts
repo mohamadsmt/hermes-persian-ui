@@ -39,6 +39,7 @@ import type {
   ModelOption,
   PendingPrompt,
   ProjectNode,
+  ProjectSessionNode,
   ProjectTreePayload,
   RollbackCheckpoint,
   RollbackDiff,
@@ -514,6 +515,9 @@ export class BrowserHermesTransport implements HermesTransport {
       ? result.projects.map((value, index) => normalizeProjectNode(value, index))
       : []
     const hydratedProjects = await Promise.all(projects.map(async (project, index) => {
+      // The v4 overview already tells us which projects own sessions through
+      // its bounded preview. Avoid one drill-in RPC for every empty project.
+      if (!project.sessions?.length) return project
       try {
         const detail = asRecord(await this.request("projects.project_sessions", {
           profile,
@@ -1035,7 +1039,11 @@ function normalizeProjectNode(value: unknown, index: number): ProjectNode {
       : []
   const repositories = rawRepositories.map((repository, repositoryIndex) => {
     const repo = asRecord(repository)
-    const rawLanes = Array.isArray(repo.lanes) ? repo.lanes : []
+    const rawLanes = Array.isArray(repo.lanes)
+      ? repo.lanes
+      : Array.isArray(repo.groups)
+        ? repo.groups
+        : []
     return {
       ...(optionalString(repo.id) ? { id: String(repo.id) } : {}),
       name: optionalString(repo.name ?? repo.label) ?? `Repository ${repositoryIndex + 1}`,
@@ -1046,19 +1054,7 @@ function normalizeProjectNode(value: unknown, index: number): ProjectNode {
         return {
           ...(optionalString(laneRow.id) ? { id: String(laneRow.id) } : {}),
           name: optionalString(laneRow.name ?? laneRow.label ?? laneRow.branch) ?? `Lane ${laneIndex + 1}`,
-          sessions: rawSessions.flatMap((session) => {
-            const item = asRecord(session)
-            const id = optionalString(item.id ?? item.session_id)
-            if (!id) return []
-            return [{
-              id,
-              ...(optionalString(item.title) ? { title: String(item.title) } : {}),
-              ...(optionalString(item.preview) ? { preview: String(item.preview) } : {}),
-              ...(optionalString(item.cwd) ? { cwd: String(item.cwd) } : {}),
-              ...(optionalString(item.model) ? { model: String(item.model) } : {}),
-              ...numberField(item, "updatedAt", "last_active", "updated_at", "started_at"),
-            }]
-          }),
+          sessions: rawSessions.flatMap(normalizeProjectSession),
         }
       }),
     }
@@ -1066,28 +1062,38 @@ function normalizeProjectNode(value: unknown, index: number): ProjectNode {
   const paths = Array.isArray(row.paths)
     ? row.paths.filter((item): item is string => typeof item === "string")
     : repositories.flatMap((repo) => repo.path ? [repo.path] : [])
-  const rawSessions = Array.isArray(row.sessions) ? row.sessions : []
-  const sessions = rawSessions.flatMap((session) => {
-    const item = asRecord(session)
-    const id = optionalString(item.id ?? item.session_id)
-    if (!id) return []
-    return [{
-      id,
-      ...(optionalString(item.title) ? { title: String(item.title) } : {}),
-      ...(optionalString(item.preview) ? { preview: String(item.preview) } : {}),
-      ...(optionalString(item.cwd) ? { cwd: String(item.cwd) } : {}),
-      ...(optionalString(item.model) ? { model: String(item.model) } : {}),
-      ...numberField(item, "updatedAt", "last_active", "updated_at", "started_at"),
-    }]
-  })
+  const rawSessions = Array.isArray(row.sessions)
+    ? row.sessions
+    : Array.isArray(row.previewSessions)
+      ? row.previewSessions
+      : Array.isArray(row.preview_sessions)
+        ? row.preview_sessions
+        : []
+  const sessions = rawSessions.flatMap(normalizeProjectSession)
   return {
     id: optionalString(row.id ?? row.project_id) ?? `project-${index}`,
     name: optionalString(row.name ?? row.label ?? row.title) ?? `Project ${index + 1}`,
     paths,
-    ...(optionalString(row.primary_path ?? row.path) ? { primaryPath: String(row.primary_path ?? row.path) } : {}),
+    ...(optionalString(row.primaryPath ?? row.primary_path ?? row.path)
+      ? { primaryPath: String(row.primaryPath ?? row.primary_path ?? row.path) }
+      : {}),
     ...(repositories.length ? { repositories } : {}),
     ...(sessions.length ? { sessions } : {}),
   }
+}
+
+function normalizeProjectSession(value: unknown): ProjectSessionNode[] {
+  const item = asRecord(value)
+  const id = optionalString(item.id ?? item.session_id)
+  if (!id) return []
+  return [{
+    id,
+    ...(optionalString(item.title) ? { title: String(item.title) } : {}),
+    ...(optionalString(item.preview) ? { preview: String(item.preview) } : {}),
+    ...(optionalString(item.cwd) ? { cwd: String(item.cwd) } : {}),
+    ...(optionalString(item.model) ? { model: String(item.model) } : {}),
+    ...numberField(item, "updatedAt", "updatedAt", "last_active", "updated_at", "started_at"),
+  }]
 }
 
 function optionalString(value: unknown): string | undefined {

@@ -92,3 +92,72 @@ test("fails closed when a stored conversation URL omits or duplicates profile", 
   await expect(app.composer).toBeDisabled();
   await expect(app.messages()).toHaveCount(0);
 });
+
+test("keeps long LTR project and session labels inside the RTL conversation rail", async ({app, page}) => {
+  const longProject =
+    "hermes-workspace-project-with-a-long-unbroken-technical-name-that-must-stay-contained";
+  const longSession =
+    "session-recovery-and-automation-validation-with-a-long-unbroken-technical-name";
+  const longPreview =
+    "preview-with-an-even-longer-unbroken-technical-value-that-forces-grid-intrinsic-sizing-unless-every-track-can-shrink";
+
+  await app.open("fa");
+  await app.ensureSession();
+  await app.openSessionRail();
+
+  const projectTitle = page.getByTestId("project-session-project-title");
+  const sessionTitle = page.getByTestId("project-session-title").first();
+  await expect(projectTitle).toBeVisible();
+  await expect(sessionTitle).toBeVisible();
+
+  // Keep the shared fake-gateway copy stable for visual snapshots while still
+  // exercising browser geometry with pathological mixed-direction text.
+  await projectTitle.evaluate((element, value) => { element.textContent = value; }, longProject);
+  await sessionTitle.evaluate((element, value) => { element.textContent = value; }, longSession);
+  await sessionTitle.evaluate((element, value) => {
+    const track = element.parentElement;
+    if (!track) throw new Error("Missing session label track");
+    const preview = document.createElement("bdi");
+    preview.className = "line-clamp-1 block w-full overflow-hidden text-xs text-muted-foreground";
+    preview.dataset.testid = "project-session-preview";
+    preview.dir = "auto";
+    preview.textContent = value;
+    track.append(preview);
+  }, longPreview);
+  const sessionPreview = page.getByTestId("project-session-preview").first();
+  await expect(sessionPreview).toBeVisible();
+
+  const geometry = await page.locator(".session-rail").evaluate((rail) => {
+    const bounds = rail.getBoundingClientRect();
+    const measure = (selector: string) => {
+      const element = rail.querySelector<HTMLElement>(selector);
+      if (!element) throw new Error(`Missing rail label: ${selector}`);
+      const rect = element.getBoundingClientRect();
+      const text = element.firstChild;
+      if (!(text instanceof Text)) throw new Error(`Missing label text: ${selector}`);
+      const first = document.createRange();
+      first.setStart(text, 0);
+      first.setEnd(text, Math.min(1, text.length));
+      return {
+        firstCharacterLeft: first.getBoundingClientRect().left,
+        left: rect.left,
+        right: rect.right,
+      };
+    };
+    return {
+      project: measure('[data-testid="project-session-project-title"]'),
+      preview: measure('[data-testid="project-session-preview"]'),
+      railLeft: bounds.left,
+      railRight: bounds.right,
+      session: measure('[data-testid="project-session-title"]'),
+    };
+  });
+
+  for (const label of [geometry.project, geometry.session, geometry.preview]) {
+    expect(label.left).toBeGreaterThanOrEqual(geometry.railLeft);
+    expect(label.right).toBeLessThanOrEqual(geometry.railRight);
+    expect(label.firstCharacterLeft).toBeGreaterThanOrEqual(geometry.railLeft);
+    expect(label.firstCharacterLeft).toBeLessThanOrEqual(geometry.railRight);
+  }
+  await app.expectNoPageOverflow();
+});

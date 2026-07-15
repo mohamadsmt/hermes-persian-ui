@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -78,5 +78,88 @@ describe("session capability controls", () => {
       />,
     );
     expect(screen.getByTestId("new-session")).toBeDisabled();
+  });
+
+  it("keeps project-scoped sessions out of flat recents while preserving local search", async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn().mockResolvedValue(undefined);
+    const onUsage = vi.fn().mockResolvedValue(undefined);
+    render(
+      <SessionRail
+        sessions={sessions}
+        activeSessionId="active"
+        locale="en"
+        labels={labels}
+        onCreate={vi.fn()}
+        onSelect={vi.fn()}
+        onRename={vi.fn()}
+        onDelete={vi.fn()}
+        onClose={onClose}
+        onUsage={onUsage}
+        projectBrowser={<div>Structured project session</div>}
+        projectRecentSessions={[sessions[1]!]}
+      />,
+    );
+
+    expect(screen.getByTestId("session-projects")).toHaveTextContent("Structured project session");
+    const management = screen.getByTestId("project-session-management");
+    expect(management).not.toHaveAttribute("open");
+    expect(within(management).getByTestId("session-item")).toHaveAttribute("data-session-id", "active");
+    const visibleRecents = screen.getAllByTestId("session-item").filter((row) => !management.contains(row));
+    expect(visibleRecents).toHaveLength(1);
+    expect(visibleRecents[0]).toHaveAttribute("data-session-id", "idle");
+    expect(screen.getByText("Recent conversations")).toBeInTheDocument();
+
+    await user.click(within(management).getByText("Manage conversations"));
+    expect(management).toHaveAttribute("open");
+    await user.click(within(management).getByTestId("session-actions"));
+    expect(within(management).getByTestId("session-usage")).toBeInTheDocument();
+    expect(within(management).getByTestId("close-session")).toBeInTheDocument();
+    expect(within(management).getByTestId("rename-session")).toBeInTheDocument();
+    expect(within(management).getByTestId("delete-session")).toBeInTheDocument();
+
+    await user.type(screen.getByTestId("session-search"), "Active");
+    expect(screen.queryByTestId("session-projects")).not.toBeInTheDocument();
+    expect(management).toHaveAttribute("hidden");
+    expect(management).toHaveAttribute("open");
+    const searchRows = screen.getAllByTestId("session-item").filter((row) => !management.contains(row));
+    expect(searchRows).toHaveLength(1);
+    expect(searchRows[0]).toHaveAttribute("data-session-id", "active");
+  });
+
+  it("keeps the fallback rail hidden until the v4 project tree finishes hydrating", () => {
+    const common = {
+      sessions,
+      locale: "en",
+      labels,
+      onCreate: vi.fn(),
+      onSelect: vi.fn(),
+      onRename: vi.fn(),
+      onDelete: vi.fn(),
+      projectRecentSessions: [] as typeof sessions,
+    };
+    const {rerender} = render(
+      <SessionRail
+        {...common}
+        loading
+        projectBrowser={<div>Premature fallback grouping</div>}
+      />,
+    );
+
+    expect(screen.queryByText("Premature fallback grouping")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("session-projects")).not.toBeInTheDocument();
+    expect(document.querySelectorAll(".session-skeleton")).toHaveLength(5);
+
+    rerender(
+      <SessionRail
+        {...common}
+        loading={false}
+        projectBrowser={<div>Hydrated v4 project tree</div>}
+      />,
+    );
+
+    expect(screen.getByTestId("session-projects")).toHaveTextContent("Hydrated v4 project tree");
+    expect(screen.queryByText("Premature fallback grouping")).not.toBeInTheDocument();
+    expect(screen.getByTestId("project-session-management")).not.toHaveAttribute("open");
   });
 });

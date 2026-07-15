@@ -103,7 +103,11 @@ function operationTone(action: PendingOperation["action"]): "danger" | "neutral"
 
 function KindBadge({kind}: {kind: LearningKind}) {
   const t = useTranslations("Knowledge");
-  return <Badge tone={kind === "skill" ? "accent" : "neutral"}>{kind === "skill" ? t("skill") : t("memory")}</Badge>;
+  return (
+    <Badge className="shrink-0" tone={kind === "skill" ? "accent" : "neutral"}>
+      {kind === "skill" ? t("skill") : t("memory")}
+    </Badge>
+  );
 }
 
 function PendingOperations({operations}: {operations: PendingOperation[]}) {
@@ -390,6 +394,7 @@ export function KnowledgePanel({
                         <button
                           aria-expanded={expanded}
                           className="flex min-h-14 w-full items-center gap-3 px-3.5 py-3 text-start"
+                          data-testid="knowledge-timeline-row"
                           onClick={() => void openDetail(node)}
                           type="button"
                         >
@@ -398,8 +403,12 @@ export function KnowledgePanel({
                           ) : (
                             <Brain aria-hidden="true" className="size-4 shrink-0 text-primary" />
                           )}
-                          <span className="min-w-0 flex-1">
-                            <BidiBlock as="span" className="block truncate text-sm font-medium">
+                          <span className="min-w-0 flex-1 overflow-hidden rtl:w-0">
+                            <BidiBlock
+                              as="span"
+                              className="block w-full truncate text-sm font-medium"
+                              data-testid="knowledge-timeline-title"
+                            >
                               {node.title}
                             </BidiBlock>
                             <span className="mt-1 block text-xs text-muted-foreground">
@@ -407,7 +416,7 @@ export function KnowledgePanel({
                             </span>
                           </span>
                           <KindBadge kind={node.kind} />
-                          {expanded ? <ChevronUp aria-hidden="true" className="size-4" /> : <ChevronDown aria-hidden="true" className="size-4" />}
+                          {expanded ? <ChevronUp aria-hidden="true" className="size-4 shrink-0" /> : <ChevronDown aria-hidden="true" className="size-4 shrink-0" />}
                         </button>
                         {expanded ? (
                           <div className="border-t border-border p-3.5">

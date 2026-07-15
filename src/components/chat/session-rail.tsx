@@ -64,6 +64,7 @@ type SessionRailProps = {
   onSearchCapabilityChange?: (support: "available" | "unavailable") => void;
   onSelectSearchResult?: (result: SessionSearchHit) => void;
   projectBrowser?: ReactNode;
+  projectRecentSessions?: SessionSummary[];
 };
 
 export function SessionRail({
@@ -89,6 +90,7 @@ export function SessionRail({
   onSearchCapabilityChange,
   onSelectSearchResult,
   projectBrowser,
+  projectRecentSessions,
 }: SessionRailProps) {
   const [query, setQuery] = useState("");
   const [menuId, setMenuId] = useState<string | null>(null);
@@ -135,6 +137,20 @@ export function SessionRail({
     )),
     [remoteSearch.results, visibleLocalIds],
   );
+  const hasQuery = Boolean(query.trim());
+  const flatSessions = hasQuery
+    ? filtered
+    : projectBrowser
+      ? projectRecentSessions ?? []
+      : filtered;
+  const projectManagedSessions = useMemo(() => {
+    if (!projectBrowser) return [];
+    const recentIds = new Set((projectRecentSessions ?? []).map((session) => session.storedId));
+    return sessions.filter((session) => !recentIds.has(session.storedId));
+  }, [projectBrowser, projectRecentSessions, sessions]);
+  const hasVisibleContent = hasQuery
+    ? Boolean(flatSessions.length || unmatchedRemoteResults.length || remoteSearch.loading || remoteSearch.error)
+    : Boolean(projectBrowser || flatSessions.length);
 
   function selectSearchHit(result: SessionSearchHit) {
     const local = sessions.find((session) => (
@@ -182,6 +198,125 @@ export function SessionRail({
     } finally {
       setBusy(false);
     }
+  }
+
+  function renderSessionRow(session: SessionSummary) {
+    const active = session.storedId === activeSessionId;
+    const deletable = active || session.status !== "active";
+    const messageMatch = remoteSearch.results.find((result) => (
+      result.sessionId === session.storedId ||
+      result.sessionId === session.runtimeId ||
+      result.lineageRoot === session.storedId ||
+      result.lineageRoot === session.runtimeId
+    ));
+
+    return (
+      <div
+        className={`session-row ${active ? "session-row--active" : ""}`}
+        key={session.storedId}
+        data-testid="session-item"
+        data-session-id={session.storedId}
+      >
+        <button
+          type="button"
+          className="session-row__main"
+          aria-current={active ? "page" : undefined}
+          onClick={() => onSelect(session)}
+          disabled={!canManage}
+        >
+          <span className="session-row__title bidi-block">{session.title}</span>
+          <span className="session-row__meta">
+            {session.model ? (
+              <bdi dir="ltr" className="technical-inline">
+                {session.model}
+              </bdi>
+            ) : null}
+            {session.messageCount !== undefined ? (
+              <span>{session.messageCount.toLocaleString(locale)}</span>
+            ) : null}
+          </span>
+          {messageMatch?.snippet ? (
+            <span
+              className="line-clamp-2 text-xs leading-5 text-muted-foreground"
+              data-testid="session-search-snippet"
+              dir="auto"
+            >
+              {messageMatch.snippet}
+            </span>
+          ) : null}
+        </button>
+        {canManage ? (
+          <button
+            type="button"
+            className="icon-button session-row__actions"
+            aria-label={`${labels.rename} / ${labels.delete}`}
+            data-testid="session-actions"
+            onClick={() => setMenuId((current) => (current === session.storedId ? null : session.storedId))}
+          >
+            <MoreHorizontal aria-hidden="true" size={18} />
+          </button>
+        ) : null}
+        {menuId === session.storedId ? (
+          <div className="session-menu" role="menu">
+            {active && onUsage ? (
+              <button
+                type="button"
+                role="menuitem"
+                data-testid="session-usage"
+                onClick={() => {
+                  setMenuId(null);
+                  void onUsage(session);
+                }}
+              >
+                <ChartNoAxesColumn aria-hidden="true" size={16} />
+                {labels.usage}
+              </button>
+            ) : null}
+            {active && onClose ? (
+              <button
+                type="button"
+                role="menuitem"
+                data-testid="close-session"
+                onClick={() => {
+                  setCloseTarget(session);
+                  setMenuId(null);
+                }}
+              >
+                <CircleX aria-hidden="true" size={16} />
+                {labels.close}
+              </button>
+            ) : null}
+            <button
+              type="button"
+              role="menuitem"
+              data-testid="rename-session"
+              onClick={() => {
+                setRenameTarget(session);
+                setMenuId(null);
+              }}
+            >
+              <Pencil aria-hidden="true" size={16} />
+              {labels.rename}
+            </button>
+            {deletable ? (
+              <button
+                type="button"
+                role="menuitem"
+                className="danger-text"
+                data-testid="delete-session"
+                onClick={() => {
+                  setDeleteTarget(session);
+                  setMenuId(null);
+                }}
+              >
+                <Trash2 aria-hidden="true" size={16} />
+                {labels.delete}
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+    );
   }
 
   return (
@@ -234,137 +369,37 @@ export function SessionRail({
             Array.from({ length: 5 }).map((_, index) => (
               <div className="session-skeleton" key={index} aria-hidden="true" />
             ))
-          ) : projectBrowser || filtered.length || unmatchedRemoteResults.length || remoteSearch.loading || remoteSearch.error ? (
+          ) : hasVisibleContent ? (
             <>
-              {!query.trim() && projectBrowser ? (
+              {!hasQuery && projectBrowser ? (
                 <div className="p-2" data-testid="session-projects">
                   {projectBrowser}
                 </div>
               ) : null}
 
-              {!query.trim() && projectBrowser && filtered.length ? (
+              {projectBrowser && projectManagedSessions.length ? (
+                <details
+                  className="mx-2 mb-2 rounded-xl border border-border bg-surface"
+                  data-testid="project-session-management"
+                  hidden={hasQuery}
+                >
+                  <summary className="flex min-h-10 cursor-pointer list-none items-center justify-between gap-2 px-3 py-2 text-xs font-medium text-muted-foreground marker:hidden">
+                    <span>{locale.startsWith("fa") ? "مدیریت گفت‌وگوها" : "Manage conversations"}</span>
+                    <span>{projectManagedSessions.length.toLocaleString(locale)}</span>
+                  </summary>
+                  <div className="border-t border-border p-1">
+                    {projectManagedSessions.map(renderSessionRow)}
+                  </div>
+                </details>
+              ) : null}
+
+              {!hasQuery && projectBrowser && flatSessions.length ? (
                 <p className="border-t border-border px-3 pb-1 pt-3 text-xs font-medium text-muted-foreground">
                   {locale.startsWith("fa") ? "گفت‌وگوهای اخیر" : "Recent conversations"}
                 </p>
               ) : null}
 
-              {filtered.map((session) => {
-              const active = session.storedId === activeSessionId;
-              const deletable = active || session.status !== "active";
-              const messageMatch = remoteSearch.results.find((result) => (
-                result.sessionId === session.storedId ||
-                result.sessionId === session.runtimeId ||
-                result.lineageRoot === session.storedId ||
-                result.lineageRoot === session.runtimeId
-              ));
-              return (
-                <div
-                  className={`session-row ${active ? "session-row--active" : ""}`}
-                  key={session.storedId}
-                  data-testid="session-item"
-                  data-session-id={session.storedId}
-                >
-                  <button
-                    type="button"
-                    className="session-row__main"
-                    aria-current={active ? "page" : undefined}
-                    onClick={() => onSelect(session)}
-                    disabled={!canManage}
-                  >
-                    <span className="session-row__title bidi-block">{session.title}</span>
-                    <span className="session-row__meta">
-                      {session.model ? (
-                        <bdi dir="ltr" className="technical-inline">
-                          {session.model}
-                        </bdi>
-                      ) : null}
-                      {session.messageCount !== undefined ? (
-                        <span>{session.messageCount.toLocaleString(locale)}</span>
-                      ) : null}
-                    </span>
-                    {messageMatch?.snippet ? (
-                      <span
-                        className="line-clamp-2 text-xs leading-5 text-muted-foreground"
-                        data-testid="session-search-snippet"
-                        dir="auto"
-                      >
-                        {messageMatch.snippet}
-                      </span>
-                    ) : null}
-                  </button>
-                  {canManage ? (
-                    <button
-                      type="button"
-                      className="icon-button session-row__actions"
-                      aria-label={`${labels.rename} / ${labels.delete}`}
-                      data-testid="session-actions"
-                      onClick={() => setMenuId((current) => (current === session.storedId ? null : session.storedId))}
-                    >
-                      <MoreHorizontal aria-hidden="true" size={18} />
-                    </button>
-                  ) : null}
-                  {menuId === session.storedId ? (
-                    <div className="session-menu" role="menu">
-                      {active && onUsage ? (
-                        <button
-                          type="button"
-                          role="menuitem"
-                          data-testid="session-usage"
-                          onClick={() => {
-                            setMenuId(null);
-                            void onUsage(session);
-                          }}
-                        >
-                          <ChartNoAxesColumn aria-hidden="true" size={16} />
-                          {labels.usage}
-                        </button>
-                      ) : null}
-                      {active && onClose ? (
-                        <button
-                          type="button"
-                          role="menuitem"
-                          data-testid="close-session"
-                          onClick={() => {
-                            setCloseTarget(session);
-                            setMenuId(null);
-                          }}
-                        >
-                          <CircleX aria-hidden="true" size={16} />
-                          {labels.close}
-                        </button>
-                      ) : null}
-                      <button
-                        type="button"
-                        role="menuitem"
-                        data-testid="rename-session"
-                        onClick={() => {
-                          setRenameTarget(session);
-                          setMenuId(null);
-                        }}
-                      >
-                        <Pencil aria-hidden="true" size={16} />
-                        {labels.rename}
-                      </button>
-                      {deletable ? (
-                        <button
-                          type="button"
-                          role="menuitem"
-                          className="danger-text"
-                          data-testid="delete-session"
-                          onClick={() => {
-                            setDeleteTarget(session);
-                            setMenuId(null);
-                          }}
-                        >
-                          <Trash2 aria-hidden="true" size={16} />
-                          {labels.delete}
-                        </button>
-                      ) : null}
-                    </div>
-                  ) : null}
-                </div>
-              );
-              })}
+              {flatSessions.map(renderSessionRow)}
 
             {unmatchedRemoteResults.length ? (
               <section

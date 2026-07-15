@@ -66,6 +66,7 @@ export class HermesApp {
         /session-rail--mobile-open/u,
       );
       await expect(newSession).toBeInViewport();
+      await this.openManagedConversations();
       return;
     }
 
@@ -84,6 +85,19 @@ export class HermesApp {
     if (!isInViewport) {
       throw new Error("Session rail is outside the desktop viewport");
     }
+    await this.openManagedConversations();
+  }
+
+  private async openManagedConversations(): Promise<void> {
+    await expect(this.page.locator(".session-rail .session-skeleton")).toHaveCount(0, {
+      timeout: 15_000,
+    });
+    const management = this.page.getByTestId("project-session-management");
+    if (await management.count() === 0) return;
+    if (await management.getAttribute("open") === null) {
+      await management.locator("summary").click();
+    }
+    await expect(management).toHaveAttribute("open", "");
   }
 
   async createSession(): Promise<void> {
@@ -102,6 +116,10 @@ export class HermesApp {
     }
     await expect(this.composer).toBeVisible();
     await expect(this.composer).toBeEnabled();
+    // Next streams metadata independently from the client-routed shell. Treat
+    // the session transition as settled only once its explicit segment title
+    // has arrived, otherwise accessibility scans can race the head update.
+    await expect(this.page).toHaveTitle(/\S/u, { timeout: 15_000 });
   }
 
   async send(source: string): Promise<void> {

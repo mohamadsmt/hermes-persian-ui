@@ -236,6 +236,164 @@ describe("browser transport capabilities and deduplication", () => {
     transport.disconnect()
   })
 
+  it("hydrates the v4 repos/groups project tree without flattening its lanes", async () => {
+    const socket = new FakeSocket()
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(gatewayBootstrap())) as typeof fetch
+    const transport = new BrowserHermesTransport({
+      fetch: fetchImpl,
+      socketFactory: () => socket as unknown as WebSocket,
+      reconnect: false,
+    })
+    const connected = transport.connect()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    socket.open()
+    await connected
+
+    const projects = transport.projects("work")
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(1))
+    const overviewRequest = JSON.parse(socket.sent[0] ?? "{}") as {
+      id: string
+      method: string
+      params: Record<string, unknown>
+    }
+    expect(overviewRequest).toMatchObject({
+      method: "projects.tree",
+      params: {profile: "work", preview_limit: 3},
+    })
+    socket.receive({
+      jsonrpc: "2.0",
+      id: overviewRequest.id,
+      result: {
+        active_id: "project-1",
+        scoped_session_ids: ["session-1"],
+        projects: [{
+          id: "project-1",
+          label: "Hermes UI",
+          path: "/workspace/Hermes UI",
+          repos: [{
+            id: "/workspace/Hermes UI",
+            label: "Hermes UI",
+            path: "/workspace/Hermes UI",
+            groups: [{id: "main", label: "main", sessions: []}],
+          }],
+          previewSessions: [{id: "session-1", title: "Preview title", last_active: 10}],
+        }],
+      },
+    })
+
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(2))
+    const detailRequest = JSON.parse(socket.sent[1] ?? "{}") as {
+      id: string
+      method: string
+      params: Record<string, unknown>
+    }
+    expect(detailRequest).toMatchObject({
+      method: "projects.project_sessions",
+      params: {profile: "work", project_id: "project-1", session_limit: 5_000},
+    })
+    socket.receive({
+      jsonrpc: "2.0",
+      id: detailRequest.id,
+      result: {
+        project: {
+          id: "project-1",
+          label: "Hermes UI",
+          path: "/workspace/Hermes UI",
+          repos: [{
+            id: "/workspace/Hermes UI",
+            label: "Hermes UI",
+            path: "/workspace/Hermes UI",
+            groups: [{
+              id: "main",
+              label: "main",
+              sessions: [{
+                id: "session-1",
+                title: "Hydrated title",
+                cwd: "/workspace/Hermes UI",
+                last_active: 20,
+              }],
+            }],
+          }],
+        },
+      },
+    })
+
+    await expect(projects).resolves.toEqual({
+      activeId: "project-1",
+      profile: "work",
+      projects: [{
+        id: "project-1",
+        name: "Hermes UI",
+        paths: ["/workspace/Hermes UI"],
+        primaryPath: "/workspace/Hermes UI",
+        repositories: [{
+          id: "/workspace/Hermes UI",
+          name: "Hermes UI",
+          path: "/workspace/Hermes UI",
+          lanes: [{
+            id: "main",
+            name: "main",
+            sessions: [{
+              id: "session-1",
+              title: "Hydrated title",
+              cwd: "/workspace/Hermes UI",
+              updatedAt: 20,
+            }],
+          }],
+        }],
+      }],
+      scopedSessionIds: ["session-1"],
+    })
+    transport.disconnect()
+  })
+
+  it("does not issue drill-in RPCs for projects with an empty overview preview", async () => {
+    const socket = new FakeSocket()
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(gatewayBootstrap())) as typeof fetch
+    const transport = new BrowserHermesTransport({
+      fetch: fetchImpl,
+      socketFactory: () => socket as unknown as WebSocket,
+      reconnect: false,
+    })
+    const connected = transport.connect()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    socket.open()
+    await connected
+
+    const projects = transport.projects("work")
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(1))
+    const overviewRequest = JSON.parse(socket.sent[0] ?? "{}") as {id: string}
+    socket.receive({
+      jsonrpc: "2.0",
+      id: overviewRequest.id,
+      result: {
+        projects: [
+          {
+            id: "empty-one",
+            label: "Empty one",
+            path: "/workspace/empty-one",
+            previewSessions: [],
+          },
+          {
+            id: "empty-two",
+            label: "Empty two",
+            path: "/workspace/empty-two",
+          },
+        ],
+      },
+    })
+
+    await expect(projects).resolves.toMatchObject({
+      profile: "work",
+      projects: [
+        {id: "empty-one"},
+        {id: "empty-two"},
+      ],
+    })
+    expect(socket.sent).toHaveLength(1)
+    transport.disconnect()
+  })
+
   it("reads profile-scoped persisted messages from dashboard and API-server envelopes", async () => {
     const socket = new FakeSocket()
     const fetchImpl = vi.fn()
