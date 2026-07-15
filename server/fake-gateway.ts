@@ -8,6 +8,107 @@ const DEFAULT_MODEL = "gpt-5.6-sol"
 const DEFAULT_PROVIDER = "openai-codex"
 const TEST_CLIENT_COOKIE = "hermes-e2e-client"
 
+type FakeCommandPair = readonly [command: string, description: string]
+
+const FAKE_COMMAND_CATEGORIES: ReadonlyArray<{
+  name: string
+  pairs: readonly FakeCommandPair[]
+}> = [
+  {
+    name: "Session",
+    pairs: [
+      ["/new", "Start a new session"],
+      ["/clear", "Clear the current conversation by starting a new session"],
+      ["/undo", "Undo the latest turn and return its prompt to the composer"],
+      ["/title", "Show or change the session title"],
+      ["/branch", "Branch the current session"],
+      ["/queue", "Queue a prompt for this session"],
+      ["/steer", "Steer the currently running turn"],
+      ["/sessions", "Browse saved sessions"],
+      ["/journey", "Open the Hermes knowledge journey"],
+      ["/redraw", "Redraw the terminal interface"],
+      ["/prompt", "Open the terminal prompt editor"],
+      ["/handoff", "Hand off this session in the terminal"],
+    ],
+  },
+  {
+    name: "Info",
+    pairs: [
+      ["/help", "Show all available Hermes commands"],
+      ["/version", "Show the Hermes version"],
+      ["/copy", "Copy an assistant response"],
+      ["/paste", "Paste from the terminal clipboard"],
+      ["/image", "Attach an image from a terminal path"],
+      ["/update", "Update Hermes from the terminal"],
+    ],
+  },
+  {
+    name: "Configuration",
+    pairs: [
+      ["/model", "Show or change the session model"],
+      ["/profile", "Show or switch profile workspace"],
+      ["/reasoning", "Show or change reasoning effort"],
+      ["/yolo", "Show or change session YOLO mode"],
+      ["/skin", "Change the terminal skin"],
+    ],
+  },
+  {
+    name: "Tools & Skills",
+    pairs: [
+      ["/skills", "Manage installed skills"],
+      ["/memory", "Manage Hermes memory"],
+      ["/pet", "Manage the terminal companion"],
+    ],
+  },
+  {
+    name: "User commands",
+    pairs: [
+      ["/alias-test", "Test quick-command alias resolution"],
+      ["/fallback-test", "Test slash.exec fallback to command.dispatch"],
+      ["/plugin-test", "Test structured plugin command output"],
+      ["/send-test", "Test a command that generates a prompt"],
+      ["/warn", "Test command output with a warning"],
+    ],
+  },
+  {
+    name: "TUI",
+    pairs: [
+      ["/logs", "Show recent gateway log lines"],
+      ["/mouse", "Configure terminal mouse tracking"],
+      ["/quit", "Quit the terminal application"],
+    ],
+  },
+]
+
+// Skills intentionally remain outside categories, matching the live gateway.
+// The web client uses this distinction to place dynamic skills in its own group.
+const FAKE_DYNAMIC_SKILLS: readonly FakeCommandPair[] = [
+  ["/skill-test", "Dynamic test skill discovered by the Hermes gateway"],
+]
+
+const FAKE_COMMAND_PAIRS: readonly FakeCommandPair[] = [
+  ...FAKE_COMMAND_CATEGORIES.flatMap((category) => category.pairs),
+  ...FAKE_DYNAMIC_SKILLS,
+]
+
+const FAKE_COMMAND_CANON: Readonly<Record<string, string>> = {
+  "/q": "/queue",
+  "/reset": "/clear",
+  "/fork": "/branch",
+  "/resume": "/sessions",
+  "/switch": "/sessions",
+  "/commands": "/help",
+  "/knowledge": "/journey",
+  ...Object.fromEntries(FAKE_COMMAND_PAIRS.map(([command]) => [command.toLowerCase(), command])),
+}
+
+const FAKE_COMMAND_SUB: Readonly<Record<string, readonly string[]>> = {
+  skills: ["list", "diff", "approve", "reject", "reload"],
+  memory: ["list", "diff", "approve", "reject"],
+  reasoning: ["auto", "off", "low", "medium", "high", "max"],
+  yolo: ["on", "off", "status"],
+}
+
 const BIDI_MARKDOWN = [
   "امروز endpoint جدید /v1/responses را تست کردم و status برابر 200 بود.",
   "لطفاً فایل src/components/Chat.tsx را با React بررسی کن.",
@@ -312,9 +413,47 @@ export class FakeHermesGateway {
           },
         }
       }
+      case "commands.catalog": {
+        return {
+          result: {
+            pairs: FAKE_COMMAND_PAIRS.map(([command, description]) => [command, description]),
+            categories: FAKE_COMMAND_CATEGORIES.map((category) => ({
+              name: category.name,
+              pairs: category.pairs.map(([command, description]) => [command, description]),
+            })),
+            canon: { ...FAKE_COMMAND_CANON },
+            sub: Object.fromEntries(
+              Object.entries(FAKE_COMMAND_SUB).map(([name, values]) => [name, [...values]]),
+            ),
+            skill_count: FAKE_DYNAMIC_SKILLS.length,
+            warning: "",
+          },
+        }
+      }
+      case "complete.slash": {
+        return { result: fakeSlashCompletions(stringValue(params.text)) }
+      }
       case "slash.exec": {
-        const command = stringValue(params.command) || "/help"
-        const output = command === "/skills diff skill-test"
+        const session = this.requireRuntimeSession(params)
+        const command = normalizeSlashCommand(stringValue(params.command) || "help")
+        const [name = "", ...argParts] = command.split(/\s+/)
+        const arg = argParts.join(" ")
+
+        if ([
+          "alias-loop-a",
+          "alias-loop-b",
+          "alias-test",
+          "fallback-test",
+          "plugin-test",
+          "send-test",
+          "skill-test",
+        ].includes(name)) {
+          throw new FakeRpcError(4018, `use command.dispatch for /${name}`)
+        }
+
+        if (name === "undo") return { result: this.undo(session) }
+
+        const output = command === "skills diff skill-test"
           ? [
               "# Pending skill write skill-test:",
               "",
@@ -324,26 +463,63 @@ export class FakeHermesGateway {
               "-Review automation output.",
               "+Review automation output without exposing managed paths.",
             ].join("\n")
-          : command === "/skills approve skill-test"
+          : command === "skills approve skill-test"
             ? "Approved 1 skills write(s)."
-            : command === "/skills reject skill-test"
+            : command === "skills reject skill-test"
               ? "Rejected pending skills write 'skill-test'."
-              : command === "/memory approve memory-test"
+              : command === "memory approve memory-test"
                 ? "Approved 1 memory write(s)."
-                : command === "/memory reject memory-test"
+                : command === "memory reject memory-test"
                   ? "Rejected pending memory write 'memory-test'."
-                  : `Executed ${command}`
-        return { result: { output } }
+                  : name === "help"
+                    ? "Hermes commands: /help, /version, /skill-test, /undo"
+                    : name === "version"
+                      ? "Hermes Agent v0.18.2-test"
+                      : `Executed /${command}`
+        return {
+          result: {
+            output,
+            ...(name === "warn" ? { warning: "Test warning from the Hermes gateway." } : {}),
+            ...(arg === "warning" ? { warning: "Command completed with a test warning." } : {}),
+          },
+        }
       }
       case "command.dispatch": {
         const session = this.requireRuntimeSession(params)
-        if (stringValue(params.name) !== "undo") throw new FakeRpcError(4018, "unsupported command")
-        if (session.running) throw new FakeRpcError(4009, "session busy")
-        const userIndex = findLastUserMessageIndex(session.messages)
-        if (userIndex < 0) throw new FakeRpcError(4018, "no user messages to undo")
-        const message = session.messages[userIndex]?.content ?? ""
-        session.messages = session.messages.slice(0, userIndex)
-        return { result: { type: "prefill", message, notice: "Undid 1 turn." } }
+        const name = normalizeSlashCommand(stringValue(params.name)).toLowerCase()
+        const arg = stringValue(params.arg)
+        if (name === "undo") return { result: this.undo(session) }
+        if (name === "fallback-test") {
+          return { result: { type: "exec", output: "Fallback through command.dispatch succeeded." } }
+        }
+        if (name === "plugin-test") {
+          return { result: { type: "plugin", output: `Plugin fixture output${arg ? `: ${arg}` : "."}` } }
+        }
+        if (name === "send-test") {
+          return {
+            result: {
+              type: "send",
+              message: arg || "Generated prompt from the send-test command.",
+              notice: "Generated a prompt from /send-test.",
+            },
+          }
+        }
+        if (name === "skill-test") {
+          return {
+            result: {
+              type: "skill",
+              name: "Test Skill",
+              message: [
+                "Use the dynamically discovered Test Skill.",
+                arg ? `User request: ${arg}` : "User request: run the deterministic skill fixture.",
+              ].join("\n"),
+            },
+          }
+        }
+        if (name === "alias-test") return { result: { type: "alias", target: "/version" } }
+        if (name === "alias-loop-a") return { result: { type: "alias", target: "/alias-loop-b" } }
+        if (name === "alias-loop-b") return { result: { type: "alias", target: "/alias-loop-a" } }
+        throw new FakeRpcError(4018, "unsupported command")
       }
       case "rollback.list": {
         this.requireRuntimeSession(params)
@@ -709,6 +885,15 @@ export class FakeHermesGateway {
     }
   }
 
+  private undo(session: FakeSession) {
+    if (session.running) throw new FakeRpcError(4009, "session busy")
+    const userIndex = findLastUserMessageIndex(session.messages)
+    if (userIndex < 0) throw new FakeRpcError(4018, "no user messages to undo")
+    const message = session.messages[userIndex]?.content ?? ""
+    session.messages = session.messages.slice(0, userIndex)
+    return { type: "prefill" as const, message, notice: "Undid 1 turn." }
+  }
+
   private requireRuntimeSession(params: Record<string, unknown>): FakeSession {
     const runtimeId = stringValue(params.session_id)
     const session = this.state.sessionsByRuntime.get(runtimeId)
@@ -766,6 +951,57 @@ function modelOptions(model: string, provider: string) {
       },
     ],
   }
+}
+
+function normalizeSlashCommand(command: string): string {
+  return command.trim().replace(/^\/+/, "")
+}
+
+function fakeSlashCompletions(text: string) {
+  if (!text.startsWith("/")) return { items: [] }
+
+  const firstSpace = text.indexOf(" ")
+  if (firstSpace < 0) {
+    const descriptions = new Map<string, string>(FAKE_COMMAND_PAIRS)
+    for (const [alias, canonical] of Object.entries(FAKE_COMMAND_CANON)) {
+      if (!descriptions.has(alias)) descriptions.set(alias, `Alias for ${canonical}`)
+    }
+    const query = text.toLowerCase()
+    const items = [...descriptions]
+      .filter(([command]) => command.toLowerCase().startsWith(query))
+      .slice(0, 30)
+      .map(([command, description]) => ({
+        // Live prompt_toolkit completions normally omit the slash because the
+        // replacement starts just after it. Display keeps the complete label.
+        text: command.slice(1),
+        display: command,
+        meta: description,
+      }))
+    return { items, replace_from: 1 }
+  }
+
+  const command = text.slice(1, firstSpace).toLowerCase()
+  const replaceFrom = text.lastIndexOf(" ") + 1
+  const prefix = text.slice(replaceFrom).toLowerCase()
+  const argumentCompletions: Record<string, Array<[text: string, meta: string]>> = {
+    memory: (FAKE_COMMAND_SUB.memory ?? []).map((value) => [value, `Memory action: ${value}`]),
+    model: [
+      ["gpt-5.6-sol --provider openai-codex", "OpenAI Codex · current"],
+      ["claude-sonnet-4.6 --provider anthropic", "Anthropic"],
+    ],
+    profile: [
+      ["default", "Default Hermes profile"],
+      ["research", "Research Hermes profile"],
+    ],
+    reasoning: (FAKE_COMMAND_SUB.reasoning ?? []).map((value) => [value, `Reasoning effort: ${value}`]),
+    skills: (FAKE_COMMAND_SUB.skills ?? []).map((value) => [value, `Skills action: ${value}`]),
+    yolo: (FAKE_COMMAND_SUB.yolo ?? []).map((value) => [value, `YOLO mode: ${value}`]),
+  }
+  const items = (argumentCompletions[command] ?? [])
+    .filter(([value]) => value.toLowerCase().startsWith(prefix))
+    .slice(0, 30)
+    .map(([value, meta]) => ({ text: value, display: value, meta }))
+  return { items, replace_from: replaceFrom }
 }
 
 function stringValue(value: unknown): string {

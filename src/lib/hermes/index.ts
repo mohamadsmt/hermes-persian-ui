@@ -6,6 +6,14 @@ export {
 } from "./transport"
 export { HermesRpcError, JsonRpcGatewayClient, isMethodNotFound, type RpcClientOptions } from "./rpc-client"
 export {
+  commandCatalogSchema,
+  commandDispatchDirectiveSchema,
+  commandPairSchema,
+  slashCompletionItemSchema,
+  slashCompletionResultSchema,
+  slashExecResponseSchema,
+} from "./schemas"
+export {
   emptyHermesEventState,
   contentToText,
   pendingPromptFromEvent,
@@ -35,6 +43,11 @@ export {
   type BackendState,
   type BootstrapInfo,
   type CapabilitySet,
+  type CommandCatalog,
+  type CommandCategory,
+  type CommandExecutionResult,
+  type CommandExecutionSource,
+  type CommandPair,
   type CommandResult,
   type ContextBreakdown,
   type ConnectionState,
@@ -63,6 +76,8 @@ export {
   type SessionSummary,
   type SessionSearchHit,
   type SessionUndoResult,
+  type SlashCompletionItem,
+  type SlashCompletionResult,
   type ToolActivity,
   type UsageStats,
   type WorkspaceEntry,

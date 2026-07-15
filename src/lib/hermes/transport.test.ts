@@ -90,6 +90,206 @@ describe("JSON-RPC gateway client", () => {
   })
 })
 
+describe("Hermes slash-command transport", () => {
+  it("parses the real pairs/categories/canon/sub catalog envelope", async () => {
+    const { socket, transport } = await connectedGatewayTransport()
+    const catalog = transport.commandCatalog("runtime-1")
+    const request = await waitForRpcRequest(socket, 0)
+    expect(request).toMatchObject({
+      method: "commands.catalog",
+      params: { session_id: "runtime-1" },
+    })
+    socket.receive({
+      jsonrpc: "2.0",
+      id: request.id,
+      result: {
+        pairs: [["/help", "Show help"], ["/dynamic-skill", "Dynamic skill"]],
+        categories: [{ name: "Info", pairs: [["/help", "Show help"]] }],
+        canon: { "/h": "/help", "/help": "/help" },
+        sub: { model: ["list", "reset"] },
+        skill_count: 1,
+        warning: "skill discovery is partial",
+      },
+    })
+
+    await expect(catalog).resolves.toEqual({
+      pairs: [["/help", "Show help"], ["/dynamic-skill", "Dynamic skill"]],
+      categories: [{ name: "Info", pairs: [["/help", "Show help"]] }],
+      canon: { "/h": "/help", "/help": "/help" },
+      sub: { model: ["list", "reset"] },
+      skillCount: 1,
+      warning: "skill discovery is partial",
+    })
+    transport.disconnect()
+  })
+
+  it("preserves complete.slash display metadata and replace_from", async () => {
+    const { socket, transport } = await connectedGatewayTransport()
+    const completion = transport.completeSlash("runtime-1", "/reasoning h")
+    const request = await waitForRpcRequest(socket, 0)
+    expect(request).toMatchObject({
+      method: "complete.slash",
+      params: { session_id: "runtime-1", text: "/reasoning h" },
+    })
+    socket.receive({
+      jsonrpc: "2.0",
+      id: request.id,
+      result: {
+        items: [{ text: "high", display: "high", meta: "Reasoning effort" }],
+        replace_from: 11,
+      },
+    })
+    await expect(completion).resolves.toEqual({
+      items: [{ text: "high", display: "high", meta: "Reasoning effort" }],
+      replaceFrom: 11,
+    })
+    transport.disconnect()
+  })
+
+  it("normalizes plain slash output and preserves a warning", async () => {
+    const { socket, transport } = await connectedGatewayTransport()
+    const execution = transport.executeCommand("runtime-1", "/VERSION")
+    const request = await waitForRpcRequest(socket, 0)
+    expect(request).toMatchObject({
+      method: "slash.exec",
+      params: { session_id: "runtime-1", command: "version" },
+    })
+    socket.receive({
+      jsonrpc: "2.0",
+      id: request.id,
+      result: { output: "Hermes 0.18.2", warning: "newer release available" },
+    })
+    await expect(execution).resolves.toEqual({
+      kind: "output",
+      output: "Hermes 0.18.2",
+      warning: "newer release available",
+      source: "slash.exec",
+      resolvedCommand: "/version",
+      aliasDepth: 0,
+    })
+    transport.disconnect()
+  })
+
+  it.each([
+    [
+      "exec output",
+      { type: "exec", output: "quick result" },
+      { kind: "output", output: "quick result", source: "command.dispatch" },
+    ],
+    [
+      "plugin output",
+      { type: "plugin", output: "plugin result" },
+      { kind: "output", output: "plugin result", source: "command.dispatch" },
+    ],
+    [
+      "send prompt",
+      { type: "send", message: "generated prompt", notice: "Queued" },
+      { kind: "send", message: "generated prompt", notice: "Queued", source: "command.dispatch" },
+    ],
+    [
+      "skill prompt",
+      { type: "skill", message: "skill prompt", name: "Research" },
+      { kind: "send", message: "skill prompt", skillName: "Research", source: "command.dispatch" },
+    ],
+    [
+      "prefill",
+      { type: "prefill", message: "restored draft", notice: "History rewound" },
+      { kind: "prefill", message: "restored draft", notice: "History rewound", source: "command.dispatch" },
+    ],
+  ])("falls back to command.dispatch for %s", async (_label, directive, expected) => {
+    const { socket, transport } = await connectedGatewayTransport()
+    const execution = transport.executeCommand("runtime-1", "/fallback ARG")
+    const slashRequest = await waitForRpcRequest(socket, 0)
+    socket.receive({
+      jsonrpc: "2.0",
+      id: slashRequest.id,
+      error: { code: 4018, message: "use command.dispatch" },
+    })
+    const dispatchRequest = await waitForRpcRequest(socket, 1)
+    expect(dispatchRequest).toMatchObject({
+      method: "command.dispatch",
+      params: { session_id: "runtime-1", name: "fallback", arg: "ARG" },
+    })
+    socket.receive({ jsonrpc: "2.0", id: dispatchRequest.id, result: directive })
+
+    await expect(execution).resolves.toMatchObject({
+      ...expected,
+      resolvedCommand: "/fallback ARG",
+      aliasDepth: 0,
+    })
+    transport.disconnect()
+  })
+
+  it("follows an alias while retaining the original argument", async () => {
+    const { socket, transport } = await connectedGatewayTransport()
+    const execution = transport.executeCommand("runtime-1", "/shortcut report")
+
+    const firstSlash = await waitForRpcRequest(socket, 0)
+    socket.receive({ jsonrpc: "2.0", id: firstSlash.id, error: { code: 4018, message: "dispatch" } })
+    const firstDispatch = await waitForRpcRequest(socket, 1)
+    socket.receive({
+      jsonrpc: "2.0",
+      id: firstDispatch.id,
+      result: { type: "alias", target: "/version", warning: "legacy alias" },
+    })
+
+    const targetSlash = await waitForRpcRequest(socket, 2)
+    expect(targetSlash).toMatchObject({
+      method: "slash.exec",
+      params: { command: "version report" },
+    })
+    socket.receive({ jsonrpc: "2.0", id: targetSlash.id, result: { output: "resolved" } })
+
+    await expect(execution).resolves.toEqual({
+      kind: "output",
+      output: "resolved",
+      warning: "legacy alias",
+      source: "slash.exec",
+      resolvedCommand: "/version report",
+      aliasDepth: 1,
+    })
+    transport.disconnect()
+  })
+
+  it("detects alias loops before issuing another gateway call", async () => {
+    const { socket, transport } = await connectedGatewayTransport()
+    const execution = transport.executeCommand("runtime-1", "/loop-a")
+
+    const slashA = await waitForRpcRequest(socket, 0)
+    socket.receive({ jsonrpc: "2.0", id: slashA.id, error: { code: 4018, message: "dispatch" } })
+    const dispatchA = await waitForRpcRequest(socket, 1)
+    socket.receive({ jsonrpc: "2.0", id: dispatchA.id, result: { type: "alias", target: "loop-b" } })
+    const slashB = await waitForRpcRequest(socket, 2)
+    socket.receive({ jsonrpc: "2.0", id: slashB.id, error: { code: 4018, message: "dispatch" } })
+    const dispatchB = await waitForRpcRequest(socket, 3)
+    socket.receive({ jsonrpc: "2.0", id: dispatchB.id, result: { type: "alias", target: "loop-a" } })
+
+    await expect(execution).rejects.toThrow("alias loop detected at /loop-a")
+    expect(socket.sent).toHaveLength(4)
+    transport.disconnect()
+  })
+
+  it("rejects a ninth alias redirect", async () => {
+    const { socket, transport } = await connectedGatewayTransport()
+    const execution = transport.executeCommand("runtime-1", "/alias-0")
+
+    for (let depth = 0; depth <= 8; depth += 1) {
+      const slash = await waitForRpcRequest(socket, depth * 2)
+      socket.receive({ jsonrpc: "2.0", id: slash.id, error: { code: 4018, message: "dispatch" } })
+      const dispatch = await waitForRpcRequest(socket, depth * 2 + 1)
+      socket.receive({
+        jsonrpc: "2.0",
+        id: dispatch.id,
+        result: { type: "alias", target: `alias-${depth + 1}` },
+      })
+    }
+
+    await expect(execution).rejects.toThrow("alias exceeded 8 redirects")
+    expect(socket.sent).toHaveLength(18)
+    transport.disconnect()
+  })
+})
+
 describe("browser transport capabilities and deduplication", () => {
   it("deduplicates semantic events and disables a method-not-found capability", async () => {
     const socket = new FakeSocket()
@@ -729,6 +929,39 @@ describe("SSE fallback parser", () => {
     ])
   })
 })
+
+async function connectedGatewayTransport(): Promise<{
+  socket: FakeSocket
+  transport: BrowserHermesTransport
+}> {
+  const socket = new FakeSocket()
+  const transport = new BrowserHermesTransport({
+    fetch: vi.fn().mockResolvedValue(jsonResponse(gatewayBootstrap())) as typeof fetch,
+    socketFactory: () => socket as unknown as WebSocket,
+    reconnect: false,
+  })
+  const connected = transport.connect()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  socket.open()
+  await connected
+  return { socket, transport }
+}
+
+async function waitForRpcRequest(
+  socket: FakeSocket,
+  index: number,
+): Promise<{
+  id: string
+  method: string
+  params: Record<string, unknown>
+}> {
+  await vi.waitFor(() => expect(socket.sent.length).toBeGreaterThan(index))
+  return JSON.parse(socket.sent[index] ?? "{}") as {
+    id: string
+    method: string
+    params: Record<string, unknown>
+  }
+}
 
 function httpOnlyBootstrap(): Response {
   return jsonResponse({

@@ -91,6 +91,7 @@ export type SessionModelSettings = {
   provider?: string;
   reasoning?: ReasoningEffort;
   fast?: boolean;
+  yolo?: boolean;
 };
 
 export type ComposerAttachment = {
@@ -120,6 +121,20 @@ export type CommandOption = {
   name: string;
   description?: string;
   usage?: string;
+  category?: string;
+  categoryLabel?: string;
+  source?: "builtin" | "skill" | "quick" | "completion";
+};
+
+export type SlashCompletionItem = {
+  text: string;
+  display?: string;
+  meta?: string;
+};
+
+export type SlashCompletion = {
+  items: SlashCompletionItem[];
+  replaceFrom: number;
 };
 
 export type TranscriptItem =

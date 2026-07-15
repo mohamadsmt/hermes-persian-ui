@@ -1,5 +1,7 @@
 import {
   bootstrapInfoSchema,
+  commandCatalogSchema,
+  commandDispatchDirectiveSchema,
   rawModelOptionsSchema,
   rawProfileSessionListSchema,
   rawSessionHistorySchema,
@@ -8,6 +10,8 @@ import {
   rawSessionMessagesResponseSchema,
   rawSessionSnapshotSchema,
   rawUsageSchema,
+  slashCompletionResultSchema,
+  slashExecResponseSchema,
 } from "./schemas"
 import { isMethodNotFound, JsonRpcGatewayClient, type RpcClientOptions } from "./rpc-client"
 import {
@@ -30,6 +34,8 @@ import type {
   AttachmentInput,
   BootstrapInfo,
   CapabilitySet,
+  CommandCatalog,
+  CommandExecutionResult,
   CommandResult,
   ConnectionState,
   ContextBreakdown,
@@ -53,12 +59,14 @@ import type {
   SessionSnapshot,
   SessionSummary,
   SessionUndoResult,
+  SlashCompletionResult,
   UsageStats,
 } from "./types"
 import { HERMES_MIN_GATEWAY_CONTRACT } from "./types"
 
 const MAX_RECONNECT_ATTEMPTS = 4
 const MAX_SEEN_EVENTS = 4_096
+const MAX_COMMAND_ALIAS_DEPTH = 8
 
 interface HttpLocalSession {
   identity: SessionIdentity
@@ -640,15 +648,160 @@ export class BrowserHermesTransport implements HermesTransport {
     }
   }
 
-  async command(session: SessionIdentity | string, command: string): Promise<CommandResult> {
+  async commandCatalog(session?: SessionIdentity | string): Promise<CommandCatalog> {
+    if (this.httpSelection) throw unsupportedHttpFallback("commands.catalog")
+    return commandCatalogSchema.parse(
+      await this.request("commands.catalog", session ? { session_id: runtimeId(session) } : {}),
+    )
+  }
+
+  async completeSlash(
+    session: SessionIdentity | string | undefined,
+    text: string,
+    signal?: AbortSignal,
+  ): Promise<SlashCompletionResult> {
+    if (this.httpSelection) throw unsupportedHttpFallback("complete.slash")
+    return slashCompletionResultSchema.parse(
+      await this.request(
+        "complete.slash",
+        {
+          text,
+          ...(session ? { session_id: runtimeId(session) } : {}),
+        },
+        signal,
+      ),
+    )
+  }
+
+  async executeCommand(
+    session: SessionIdentity | string,
+    command: string,
+  ): Promise<CommandExecutionResult> {
     if (this.httpSelection) throw unsupportedHttpFallback("slash.exec")
-    const result = (await this.request("slash.exec", {
-      session_id: runtimeId(session),
-      command,
-    })) as { output?: unknown; warning?: unknown }
+    return this.executeCommandResolved(session, command, 0, new Set<string>(), [])
+  }
+
+  /** Compatibility bridge for callers that only understand transcript output. */
+  async command(session: SessionIdentity | string, command: string): Promise<CommandResult> {
+    const result = await this.executeCommand(session, command)
+    if (result.kind === "output") {
+      return {
+        output: result.output,
+        ...(result.warning ? { warning: result.warning } : {}),
+      }
+    }
     return {
-      output: String(result.output ?? ""),
-      ...(optionalString(result.warning) ? { warning: String(result.warning) } : {}),
+      output: result.notice ?? result.message,
+      ...(result.warning ? { warning: result.warning } : {}),
+    }
+  }
+
+  private async executeCommandResolved(
+    session: SessionIdentity | string,
+    command: string,
+    aliasDepth: number,
+    visitedAliases: Set<string>,
+    inheritedWarnings: string[],
+  ): Promise<CommandExecutionResult> {
+    const parsed = parseSlashCommand(command)
+    const aliasKey = parsed.name.toLocaleLowerCase("en-US")
+    if (visitedAliases.has(aliasKey)) {
+      throw new Error(`Hermes command alias loop detected at /${parsed.name}`)
+    }
+    visitedAliases.add(aliasKey)
+
+    let source: "slash.exec" | "command.dispatch" = "slash.exec"
+    let response: unknown
+    try {
+      response = slashExecResponseSchema.parse(
+        await this.request("slash.exec", {
+          session_id: runtimeId(session),
+          command: parsed.command.slice(1),
+        }),
+      )
+    } catch {
+      source = "command.dispatch"
+      response = commandDispatchDirectiveSchema.parse(
+        await this.request("command.dispatch", {
+          session_id: runtimeId(session),
+          name: parsed.name,
+          arg: parsed.arg,
+        }),
+      )
+    }
+
+    const responseRecord = asRecord(response)
+    const warning = combineCommandWarnings(inheritedWarnings, optionalString(responseRecord.warning))
+    const directive = commandDispatchDirectiveSchema.safeParse(response)
+    if (!directive.success) {
+      return {
+        kind: "output",
+        output: optionalString(responseRecord.output) ?? "",
+        ...(warning ? { warning } : {}),
+        source,
+        resolvedCommand: parsed.command,
+        aliasDepth,
+      }
+    }
+
+    switch (directive.data.type) {
+      case "output":
+      case "exec":
+      case "plugin":
+        return {
+          kind: "output",
+          output: directive.data.output ?? "",
+          ...(warning ? { warning } : {}),
+          source,
+          resolvedCommand: parsed.command,
+          aliasDepth,
+        }
+      case "send":
+        return {
+          kind: "send",
+          message: directive.data.message,
+          ...(directive.data.notice ? { notice: directive.data.notice } : {}),
+          ...(warning ? { warning } : {}),
+          source,
+          resolvedCommand: parsed.command,
+          aliasDepth,
+        }
+      case "skill":
+        return {
+          kind: "send",
+          message: directive.data.message,
+          ...(directive.data.notice ? { notice: directive.data.notice } : {}),
+          ...(warning ? { warning } : {}),
+          ...(directive.data.name ? { skillName: directive.data.name } : {}),
+          source,
+          resolvedCommand: parsed.command,
+          aliasDepth,
+        }
+      case "prefill":
+        return {
+          kind: "prefill",
+          message: directive.data.message,
+          ...(directive.data.notice ? { notice: directive.data.notice } : {}),
+          ...(warning ? { warning } : {}),
+          source,
+          resolvedCommand: parsed.command,
+          aliasDepth,
+        }
+      case "alias": {
+        if (aliasDepth >= MAX_COMMAND_ALIAS_DEPTH) {
+          throw new Error(`Hermes command alias exceeded ${MAX_COMMAND_ALIAS_DEPTH} redirects`)
+        }
+        const nextCommand = buildAliasCommand(directive.data.target, parsed.arg)
+        return this.executeCommandResolved(
+          session,
+          nextCommand,
+          aliasDepth + 1,
+          visitedAliases,
+          warning ? [warning] : [],
+        )
+      }
+      default:
+        throw new Error("Hermes returned an unsupported command directive")
     }
   }
 
@@ -1002,6 +1155,30 @@ function runtimeId(session: SessionIdentity | string): string {
 
 function storedId(session: SessionIdentity | string): string {
   return typeof session === "string" ? session : session.storedId
+}
+
+function parseSlashCommand(value: string): { name: string; arg: string; command: string } {
+  const commandText = value.trim().replace(/^\/+/, "")
+  const match = commandText.match(/^(\S+)(?:\s+([\s\S]*))?$/)
+  if (!match?.[1]) throw new Error("Hermes slash command cannot be empty")
+  const name = match[1].toLowerCase()
+  const arg = match[2]?.trim() ?? ""
+  return {
+    name,
+    arg,
+    command: `/${name}${arg ? ` ${arg}` : ""}`,
+  }
+}
+
+function buildAliasCommand(target: string, originalArg: string): string {
+  const normalizedTarget = target.trim().replace(/^\/+/, "")
+  if (!normalizedTarget) throw new Error("Hermes command alias returned an empty target")
+  return `/${normalizedTarget}${originalArg ? ` ${originalArg}` : ""}`
+}
+
+function combineCommandWarnings(inherited: string[], warning?: string): string | undefined {
+  const warnings = [...inherited, ...(warning?.trim() ? [warning.trim()] : [])]
+  return warnings.length ? warnings.join("\n") : undefined
 }
 
 function sameOriginWebSocketUrl(path: string): string {

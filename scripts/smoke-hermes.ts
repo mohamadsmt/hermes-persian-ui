@@ -282,6 +282,8 @@ async function main(): Promise<void> {
     }
     log(`session: created temporary runtime ${runtimeId}; gateway contract v${gatewayContract}`)
 
+    await verifySlashCommands(client, runtimeId)
+
     if (recovery) await verifyRecovery(client, runtimeId, recovery)
 
     if (!allowBilling) {
@@ -322,6 +324,44 @@ async function main(): Promise<void> {
 
   if (failure) throw failure
   log(`PASS (${allowBilling ? "live prompt" : "connectivity only"})`)
+}
+
+async function verifySlashCommands(client: GatewayRpcClient, runtimeId: string): Promise<void> {
+  const catalog = asRecord(
+    await client.request("commands.catalog", { session_id: runtimeId }),
+    "commands.catalog",
+  )
+  if (!Array.isArray(catalog.pairs) || !Array.isArray(catalog.categories)) {
+    throw new Error("Hermes commands.catalog is missing pairs/categories")
+  }
+  if (!isRecord(catalog.canon) || !isRecord(catalog.sub)) {
+    throw new Error("Hermes commands.catalog is missing canon/sub")
+  }
+  const hasVersion = catalog.pairs.some((pair) =>
+    Array.isArray(pair) && typeof pair[0] === "string" && pair[0].toLowerCase() === "/version",
+  )
+  if (!hasVersion) throw new Error("Hermes commands.catalog does not advertise /version")
+
+  const completion = asRecord(
+    await client.request("complete.slash", { session_id: runtimeId, text: "/ver" }),
+    "complete.slash",
+  )
+  if (!Array.isArray(completion.items) || typeof completion.replace_from !== "number") {
+    throw new Error("Hermes complete.slash is missing items/replace_from")
+  }
+  const hasVersionCompletion = completion.items.some((item) => {
+    if (!isRecord(item)) return false
+    const candidate = firstString(item.text, item.display)?.replace(/^\//u, "").toLowerCase()
+    return candidate === "version"
+  })
+  if (!hasVersionCompletion) throw new Error("Hermes complete.slash did not complete /version")
+
+  const execution = asRecord(
+    await client.request("slash.exec", { session_id: runtimeId, command: "version" }),
+    "slash.exec",
+  )
+  requiredString(execution.output, "slash.exec.output")
+  log(`slash: ${catalog.pairs.length} catalog pair(s); completion and /version execution verified`)
 }
 
 async function prepareRecoveryFixture(): Promise<RecoveryFixture> {

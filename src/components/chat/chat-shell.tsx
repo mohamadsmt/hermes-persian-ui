@@ -38,6 +38,16 @@ import { useHermesWorkspace } from "@/components/workspace/workspace-provider";
 
 import { ArtifactRail } from "./artifact-rail";
 import { ChatHeader } from "./chat-header";
+import {
+  findCommandOption,
+  getWebCommandUnavailableReason,
+  isWebCommandUnavailable,
+  normalizeCommandCatalog,
+  normalizeSlashCompletions,
+  parseSlashCommand,
+  resolveCanonicalCommand,
+  type NormalizedCommandCatalog,
+} from "./command-catalog";
 import { CommandPalette } from "./command-palette";
 import { Composer } from "./composer";
 import { NewSessionDialog, type NewSessionSubmission } from "./new-session-dialog";
@@ -56,14 +66,15 @@ import {
   reduceTranscript,
 } from "./transcript-state";
 import { blobToDataUrl, synthesizeSpeech, transcribeAudioBlob, type SpeechPlayback } from "./voice";
+import { REASONING_EFFORTS } from "./ui-types";
 import type {
   Artifact,
   ChatMessage,
-  CommandOption,
   ComposerAttachment,
   ConnectionPhase,
   InteractivePrompt,
   SessionSummary,
+  SlashCompletion,
   ToolRun,
   TranscriptItem,
 } from "./ui-types";
@@ -80,6 +91,34 @@ type Notice = { kind: "error" | "warning" | "info"; message: string };
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 const MAX_PDF_BYTES = 50 * 1024 * 1024;
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
+const HISTORY_MUTATING_COMMANDS = new Set([
+  "undo",
+  "retry",
+  "rollback",
+  "snapshot",
+  "compress",
+  "history",
+]);
+const CATALOG_MUTATING_COMMANDS = new Set([
+  "reload",
+  "reload-mcp",
+  "reload-skills",
+  "skills",
+  "plugins",
+  "bundles",
+  "learn",
+]);
+const UI_COMMAND_ALIASES: Readonly<Record<string, string>> = {
+  reset: "clear",
+  fork: "branch",
+  resume: "sessions",
+  switch: "sessions",
+  q: "queue",
+  commands: "help",
+  knowledge: "journey",
+  learning: "journey",
+  "memory-graph": "journey",
+};
 
 function record(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === "object" ? (value as Record<string, unknown>) : {};
@@ -190,29 +229,6 @@ function parseProgress(value: string | undefined): number | undefined {
   return match?.[1] ? Math.max(0, Math.min(100, Number(match[1]))) : undefined;
 }
 
-function parseCommands(value: unknown): CommandOption[] {
-  const root = record(value);
-  const list = Array.isArray(value)
-    ? value
-    : Array.isArray(root.commands)
-      ? root.commands
-      : Array.isArray(root.catalog)
-        ? root.catalog
-        : [];
-  return list.flatMap((item) => {
-    if (typeof item === "string") return [{ name: item.replace(/^\//, "") }];
-    const command = record(item);
-    const name = optionalString(command.name ?? command.command)?.replace(/^\//, "");
-    return name
-      ? [{
-          name,
-          ...(optionalString(command.description ?? command.help) ? { description: String(command.description ?? command.help) } : {}),
-          ...(optionalString(command.usage) ? { usage: String(command.usage) } : {}),
-        }]
-      : [];
-  });
-}
-
 function artifactFromValue(value: unknown, toolId?: string): Artifact | null {
   const item = record(value);
   const content = optionalString(item.content ?? item.text ?? item.url ?? item.data_url);
@@ -320,6 +336,7 @@ export function ChatShell({
   const reasoningSeenRef = useRef(false);
   const assistantPartSequenceRef = useRef(0);
   const processingQueueRef = useRef(false);
+  const catalogRefreshAfterRunRef = useRef(false);
   const speechPlaybackRef = useRef<SpeechPlayback | null>(null);
   const resumeStoredSessionRef = useRef<(storedId: string, replacePath?: boolean) => Promise<void>>(
     async () => undefined,
@@ -529,6 +546,7 @@ export function ChatShell({
         // stale per-session cache instead of falling back to a fabricated tier.
         reasoning: snapshot.info?.reasoningEffort ?? "",
         ...(snapshot.info?.fast === undefined ? {} : { fast: snapshot.info.fast }),
+        ...(snapshot.info?.yolo === undefined ? {} : { yolo: snapshot.info.yolo }),
       });
       setActiveProfile(ownerProfile);
     },
@@ -598,9 +616,12 @@ export function ChatShell({
       const phase = connectionPhase(state);
       setConnection(phase);
       if (phase === "reconnecting") reconnectingRef.current = true;
-      if (phase === "connected" && reconnectingRef.current && identityRef.current) {
+      if (phase === "connected" && reconnectingRef.current) {
         reconnectingRef.current = false;
-        void resumeStoredSessionRef.current(identityRef.current.storedId, true);
+        void queryClient.invalidateQueries({ queryKey: ["hermes-commands"] });
+        if (identityRef.current) {
+          void resumeStoredSessionRef.current(identityRef.current.storedId, true);
+        }
       }
     });
     let cancelled = false;
@@ -667,7 +688,7 @@ export function ChatShell({
       speechPlaybackRef.current = null;
       transport.disconnect();
     };
-  }, [applySnapshot, locale, router, tErrors, transport]);
+  }, [applySnapshot, locale, queryClient, router, tErrors, transport]);
 
   useEffect(() => {
     const unsubscribe = transport.onEvent((event) => {
@@ -781,6 +802,10 @@ export function ChatShell({
         lastReasoningIdRef.current = null;
         setRunning(false);
         void queryClient.invalidateQueries({ queryKey: ["hermes-sessions"] });
+        if (catalogRefreshAfterRunRef.current) {
+          catalogRefreshAfterRunRef.current = false;
+          void queryClient.invalidateQueries({ queryKey: ["hermes-commands"] });
+        }
         return;
       }
       if (event.type === "session.info") {
@@ -796,6 +821,7 @@ export function ChatShell({
           || optionalString(payload.provider)
           || hasReasoningEffort
           || typeof payload.fast === "boolean"
+          || typeof payload.yolo === "boolean"
         )) {
           const eventProfile = optionalString(payload.profile_name) ?? activeProfile;
           setModelSettings(chatSessionScopeKey(eventProfile, stored), {
@@ -805,6 +831,7 @@ export function ChatShell({
               ? { reasoning: optionalString(payload.reasoning_effort) ?? "" }
               : {}),
             ...(typeof payload.fast === "boolean" ? { fast: payload.fast } : {}),
+            ...(typeof payload.yolo === "boolean" ? { yolo: payload.yolo } : {}),
           });
         }
         return;
@@ -993,15 +1020,9 @@ export function ChatShell({
   }, [sessionsQuery.error, tErrors]);
 
   const commandsQuery = useQuery({
-    queryKey: ["hermes-commands", identity?.runtimeId ?? "none"],
-    queryFn: async () => {
-      try {
-        return parseCommands(await transport.request("commands.catalog", identity ? { session_id: identity.runtimeId } : {}));
-      } catch {
-        return [];
-      }
-    },
-    enabled: connection === "connected",
+    queryKey: ["hermes-commands", activeProfile, identity?.runtimeId ?? "none"],
+    queryFn: () => transport.commandCatalog(identity ?? undefined),
+    enabled: connection === "connected" && capabilities?.gateway === true,
     staleTime: 60_000,
   });
 
@@ -1012,8 +1033,25 @@ export function ChatShell({
         .map((session) => toSessionSummary(session, tSessions("untitled"))),
     [activeProfile, sessionsQuery.data, tSessions],
   );
-  const models = modelsQuery.data ?? [];
-  const commands = commandsQuery.data ?? [];
+  const models = useMemo(() => modelsQuery.data ?? [], [modelsQuery.data]);
+  const commandCatalog = useMemo<NormalizedCommandCatalog>(
+    () => normalizeCommandCatalog(commandsQuery.data, locale),
+    [commandsQuery.data, locale],
+  );
+  const commands = useMemo(
+    () => commandCatalog.groups.flatMap((group) => group.commands),
+    [commandCatalog],
+  );
+  const slashAvailable = connection === "connected"
+    && capabilities?.gateway === true
+    && !commandsQuery.isError;
+  const slashUnavailableReason = capabilities?.httpFallback && !capabilities.gateway
+    ? tCommands("gatewayRequired")
+    : commandsQuery.error instanceof Error
+      ? `${tCommands("catalogUnavailable")} ${commandsQuery.error.message}`
+      : connection === "connected"
+        ? tCommands("catalogUnavailable")
+        : tCommands("connectionRequired");
   const projectPayload = projectsQuery.data ?? null;
   const projectRecentSessions = useMemo(
     () => sessionsOutsideRenderedProjects(projectPayload, sessions),
@@ -1041,6 +1079,71 @@ export function ChatShell({
   }, [projectPayload, sessions]);
 
   useEffect(() => {
+    if (!commandCatalog.warning) return;
+    setNotice({ kind: "warning", message: commandCatalog.warning });
+  }, [commandCatalog.warning]);
+
+  const completeSlash = useCallback(async (text: string, signal: AbortSignal): Promise<SlashCompletion> => {
+    const gatewayResult = await transport.completeSlash(identityRef.current ?? undefined, text, signal);
+    const parsed = parseSlashCommand(text);
+    const canonical = parsed ? resolveCanonicalCommand(parsed.normalizedName, commandCatalog) : undefined;
+    const hasArgumentSlot = parsed !== null && /\s/u.test(text.slice(parsed.name.length + 1));
+    if (canonical && hasArgumentSlot) {
+      const replaceFrom = Math.max(0, Math.min(text.length, gatewayResult.replaceFrom));
+      const needle = text.slice(replaceFrom).toLocaleLowerCase("en-US");
+      const localItems = (() => {
+        if (canonical === "model") {
+          return models.flatMap((model) => {
+            const searchable = `${model.id} ${model.provider}`.toLocaleLowerCase("en-US");
+            return searchable.includes(needle)
+              ? [{
+                  text: `${model.id} --provider ${model.provider}`,
+                  display: model.id,
+                  meta: model.provider,
+                }]
+              : [];
+          });
+        }
+        if (canonical === "profile") {
+          return profiles
+            .filter((profile) => profile.toLocaleLowerCase("en-US").includes(needle))
+            .map((profile) => ({ text: profile, display: profile, meta: tSessions("profile") }));
+        }
+        if (["resume", "sessions", "switch"].includes(canonical)) {
+          return sessions.flatMap((session) => {
+            const searchable = `${session.storedId} ${session.title}`.toLocaleLowerCase("en-US");
+            return searchable.includes(needle)
+              ? [{ text: session.storedId, display: session.title, meta: session.storedId }]
+              : [];
+          });
+        }
+        if (canonical === "reasoning") {
+          return REASONING_EFFORTS
+            .filter((effort) => effort.includes(needle))
+            .map((effort) => ({ text: effort, display: effort, meta: tModels("reasoning") }));
+        }
+        if (canonical === "yolo") {
+          return ["on", "off", "status"]
+            .filter((value) => value.includes(needle))
+            .map((value) => ({ text: value, display: value, meta: tPrompts("yoloTitle") }));
+        }
+        return [];
+      })();
+      if (localItems.length) return { items: localItems, replaceFrom };
+    }
+
+    const completions = normalizeSlashCompletions(text, gatewayResult, commandCatalog);
+    return {
+      replaceFrom: gatewayResult.replaceFrom,
+      items: completions.map((completion) => ({
+        text: completion.text,
+        display: completion.display,
+        meta: completion.description,
+      })),
+    };
+  }, [commandCatalog, models, profiles, sessions, tModels, tPrompts, tSessions, transport]);
+
+  useEffect(() => {
     if (!active) return;
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLocaleLowerCase() === "k") {
@@ -1065,12 +1168,12 @@ export function ChatShell({
     setActiveStoredId(storedId);
   }, [activeProfile, locale, router]);
 
-  async function createSession(input: NewSessionSubmission) {
-    if (connection !== "connected" || !capabilities?.gateway || !capabilities.sessions) return;
+  async function createSession(input: NewSessionSubmission): Promise<SessionSnapshot | undefined> {
+    if (connection !== "connected" || !capabilities?.gateway || !capabilities.sessions) return undefined;
     const ownerProfile = input.profile.trim();
     if (!/^[a-z0-9][a-z0-9_-]{0,63}$/u.test(ownerProfile) || ownerProfile === "all") {
       setNotice({kind: "error", message: tErrors("profileRequired")});
-      return;
+      return undefined;
     }
     resumeGenerationRef.current += 1;
     identityRef.current = null;
@@ -1082,6 +1185,7 @@ export function ChatShell({
     try {
       const snapshot = await transport.sessionCreate({
         profile: ownerProfile,
+        ...(input.title ? { title: input.title } : {}),
         ...(input.cwd ? { cwd: input.cwd } : {}),
         ...(input.model ? { model: input.model } : {}),
         ...(input.provider ? { provider: input.provider } : {}),
@@ -1095,9 +1199,11 @@ export function ChatShell({
       await queryClient.invalidateQueries({ queryKey: ["hermes-sessions"] });
       await queryClient.invalidateQueries({ queryKey: ["hermes-projects"] });
       setMobileRail(null);
+      return snapshot;
     } catch (error) {
       refreshCapabilities();
       setNotice({ kind: "error", message: error instanceof Error ? error.message : tErrors("generic") });
+      return undefined;
     } finally {
       setLoadingSession(false);
     }
@@ -1360,23 +1466,356 @@ export function ChatShell({
     }
   }
 
-  async function dispatchMessage(source: string, mode: "send" | "steer" = "send") {
+  function appendSystemMessage(content: string) {
+    if (!content.trim()) return;
+    setTranscriptItems((current) => reduceTranscript(current, {
+      type: "append-message",
+      message: {
+        id: localId("command"),
+        role: "system",
+        content,
+        rawSource: content,
+        createdAt: new Date().toISOString(),
+        status: "complete",
+      },
+    }));
+  }
+
+  function appendCommandMessage(content: string): string {
+    const id = localId("command-user");
+    setTranscriptItems((current) => reduceTranscript(current, {
+      type: "append-message",
+      message: {
+        id,
+        role: "user",
+        content,
+        rawSource: content,
+        createdAt: new Date().toISOString(),
+        status: "complete",
+      },
+    }));
+    return id;
+  }
+
+  async function refreshCommandHistory(active: SessionIdentity) {
+    const history = await transport.sessionHistory(active);
+    if (identityRef.current?.runtimeId === active.runtimeId) {
+      setTranscriptItems(messagesToTranscript(history));
+    }
+  }
+
+  async function openProfileWorkspace(profile: string) {
+    resumeGenerationRef.current += 1;
+    identityRef.current = null;
+    activeStoredIdRef.current = undefined;
+    setActiveProfile(profile);
+    setIdentity(null);
+    setRunning(false);
+    setTranscriptItems([]);
+    domainPromptsRef.current.clear();
+    setActiveStoredId(undefined);
+    router.push(`/${locale}?profile=${encodeURIComponent(profile)}`);
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["hermes-sessions"] }),
+      queryClient.invalidateQueries({ queryKey: ["hermes-commands"] }),
+    ]);
+  }
+
+  async function sendCommandPrompt(active: SessionIdentity, text: string) {
+    const startedWhileRunning = running;
+    const id = localId("command-send");
+    setTranscriptItems((current) => {
+      const ordinal = current.reduce(
+        (max, item) => item.kind === "message" && item.message.userOrdinal !== undefined
+          ? Math.max(max, item.message.userOrdinal)
+          : max,
+        -1,
+      ) + 1;
+      return reduceTranscript(current, {
+        type: "append-message",
+        message: {
+          id,
+          role: "user",
+          content: text,
+          rawSource: text,
+          createdAt: new Date().toISOString(),
+          status: "complete",
+          userOrdinal: ordinal,
+        },
+      });
+    });
+    if (!startedWhileRunning) setRunning(true);
+    try {
+      await transport.send(active, text);
+    } catch (error) {
+      if (!startedWhileRunning) setRunning(false);
+      setTranscriptItems((current) => reduceTranscript(current, {
+        type: "message-status",
+        id,
+        status: "error",
+      }));
+      throw error;
+    }
+  }
+
+  async function dispatchUiCommand(
+    parsed: NonNullable<ReturnType<typeof parseSlashCommand>>,
+    canonical: string,
+    active: SessionIdentity,
+    activeKey: string,
+  ): Promise<boolean> {
+    const args = parsed.args;
+    if (canonical === "new" || canonical === "clear") {
+      const currentSession = sessions.find((session) => session.storedId === active.storedId);
+      const snapshot = await createSession({
+        profile: activeProfile,
+        ...(args ? { title: args } : {}),
+        ...(currentSession?.cwd ? { cwd: currentSession.cwd } : {}),
+        ...(currentModelSettings.model ? { model: currentModelSettings.model } : {}),
+        ...(currentModelSettings.provider ? { provider: currentModelSettings.provider } : {}),
+        ...(currentModelSettings.reasoning ? { reasoningEffort: currentModelSettings.reasoning } : {}),
+        ...(currentModelSettings.fast === undefined ? {} : { fast: currentModelSettings.fast }),
+      });
+      if (snapshot) appendSystemMessage(tCommands("sessionCreated"));
+      return true;
+    }
+    if (canonical === "branch") {
+      const snapshot = await branchSession(args || undefined);
+      if (snapshot) appendSystemMessage(tCommands("sessionBranched"));
+      return true;
+    }
+    if (canonical === "sessions") {
+      if (!args) {
+        setMobileRail("sessions");
+        return true;
+      }
+      const needle = args.toLocaleLowerCase();
+      const session = sessions.find((candidate) =>
+        candidate.storedId.toLocaleLowerCase() === needle
+        || candidate.title.toLocaleLowerCase() === needle,
+      );
+      if (!session) appendSystemMessage(tCommands("sessionNotFound", { session: args }));
+      else await selectSession(session);
+      return true;
+    }
+    if (canonical === "model") {
+      if (!args) {
+        appendSystemMessage(tCommands("currentModel", {
+          model: currentModelSettings.model ?? tCommands("defaultValue"),
+        }));
+        return true;
+      }
+      const tokens = args.split(/\s+/u);
+      const requested = tokens[0]?.toLocaleLowerCase();
+      const providerFlag = tokens.findIndex((token) => token === "--provider");
+      const requestedProvider = providerFlag >= 0 ? tokens[providerFlag + 1]?.toLocaleLowerCase() : undefined;
+      const model = models.find((candidate) =>
+        candidate.id.toLocaleLowerCase() === requested
+        && (!requestedProvider || candidate.provider.toLocaleLowerCase() === requestedProvider),
+      );
+      if (!model) {
+        appendSystemMessage(tCommands("modelNotFound", { model: tokens[0] ?? args }));
+        return true;
+      }
+      if (messages.length > 8) setNotice({ kind: "warning", message: tModels("cacheWarning") });
+      await transport.setModel(active, model.id, model.provider);
+      setModelSettings(activeKey, { model: model.id, provider: model.provider });
+      await queryClient.invalidateQueries({ queryKey: ["hermes-models"] });
+      appendSystemMessage(tCommands("modelChanged", { model: model.id }));
+      return true;
+    }
+    if (canonical === "profile") {
+      if (!args) {
+        appendSystemMessage(tCommands("currentProfile", { profile: activeProfile }));
+        return true;
+      }
+      const profile = profiles.find((candidate) => candidate.toLocaleLowerCase() === args.toLocaleLowerCase());
+      if (!profile) appendSystemMessage(tCommands("profileNotFound", { profile: args }));
+      else await openProfileWorkspace(profile);
+      return true;
+    }
+    if (canonical === "title") {
+      if (!args) {
+        appendSystemMessage(tCommands("currentTitle", { title: sessionTitle }));
+        return true;
+      }
+      await transport.sessionRename(active, args, activeProfile);
+      setSessionTitle(args);
+      await queryClient.invalidateQueries({ queryKey: ["hermes-sessions"] });
+      appendSystemMessage(tCommands("titleChanged", { title: args }));
+      return true;
+    }
+    if (canonical === "reasoning") {
+      if (!args) {
+        appendSystemMessage(tCommands("currentReasoning", {
+          effort: currentModelSettings.reasoning || tCommands("defaultValue"),
+        }));
+        return true;
+      }
+      const effort = REASONING_EFFORTS.find((candidate) => candidate === args.toLocaleLowerCase());
+      if (!effort) {
+        appendSystemMessage(tCommands("reasoningUsage", { values: REASONING_EFFORTS.join(" | ") }));
+        return true;
+      }
+      await transport.request("config.set", {
+        session_id: active.runtimeId,
+        key: "reasoning",
+        value: effort,
+      });
+      setModelSettings(activeKey, { reasoning: effort });
+      appendSystemMessage(tCommands("reasoningChanged", { effort }));
+      return true;
+    }
+    if (canonical === "yolo") {
+      const action = (args || "status").toLocaleLowerCase();
+      if (action === "status") {
+        appendSystemMessage(currentModelSettings.yolo ? tCommands("yoloOn") : tCommands("yoloOff"));
+        return true;
+      }
+      if (action !== "on" && action !== "off") {
+        appendSystemMessage(tCommands("yoloUsage"));
+        return true;
+      }
+      const result = record(await transport.request("config.set", {
+        session_id: active.runtimeId,
+        key: "yolo",
+        value: action,
+        scope: "session",
+      }));
+      const enabled = String(result.value ?? action).toLocaleLowerCase() === "1"
+        || String(result.value ?? action).toLocaleLowerCase() === "on";
+      setModelSettings(activeKey, { yolo: enabled });
+      appendSystemMessage(enabled ? tCommands("yoloOn") : tCommands("yoloOff"));
+      return true;
+    }
+    if (canonical === "queue") {
+      if (!args) {
+        appendSystemMessage(queue.length
+          ? tCommands("queueCount", { count: queue.length })
+          : tCommands("queueEmpty"));
+      } else {
+        enqueuePrompt(activeKey, args);
+        appendSystemMessage(tCommands("queued"));
+      }
+      return true;
+    }
+    if (canonical === "steer") {
+      if (!args) {
+        appendSystemMessage(tCommands("steerUsage"));
+        return true;
+      }
+      const accepted = await transport.steer(active, args);
+      appendSystemMessage(accepted ? tCommands("steerAccepted") : tCommands("steerUnavailable"));
+      return true;
+    }
+    if (canonical === "help") {
+      setCommandPaletteOpen(true);
+      return true;
+    }
+    if (canonical === "journey") {
+      router.push(`/${locale}/knowledge`);
+      return true;
+    }
+    if (canonical === "copy") {
+      const assistantMessages = messages.filter((message) => message.role === "assistant" && message.rawSource.trim());
+      const requested = args ? Number(args) : assistantMessages.length;
+      if (!Number.isInteger(requested) || requested < 1 || requested > assistantMessages.length) {
+        appendSystemMessage(assistantMessages.length
+          ? tCommands("copyUsage", { count: assistantMessages.length })
+          : tCommands("copyNothing"));
+        return true;
+      }
+      await navigator.clipboard.writeText(assistantMessages[requested - 1]!.rawSource);
+      appendSystemMessage(tCommands("copiedResponse", { number: requested }));
+      return true;
+    }
+    return false;
+  }
+
+  async function dispatchSlashCommand(
+    text: string,
+    parsed: NonNullable<ReturnType<typeof parseSlashCommand>>,
+    active: SessionIdentity,
+    activeKey: string,
+  ) {
+    const commandMessageId = appendCommandMessage(text);
+    setDraft(activeKey, "");
+    const gatewayCanonical = resolveCanonicalCommand(parsed.normalizedName, commandCatalog);
+    const canonical = UI_COMMAND_ALIASES[parsed.normalizedName] ?? gatewayCanonical;
+    const known = findCommandOption(commandCatalog, parsed.normalizedName);
+    const unavailable = known?.surface === "unavailable" || isWebCommandUnavailable(parsed.normalizedName, known?.category);
+
+    try {
+      if (!capabilities?.gateway) {
+        appendSystemMessage(tCommands("gatewayRequired"));
+        return;
+      }
+      if (unavailable) {
+        appendSystemMessage(
+          getWebCommandUnavailableReason(parsed.normalizedName, locale) ?? tCommands("webUnavailable"),
+        );
+        return;
+      }
+      if (await dispatchUiCommand(parsed, canonical, active, activeKey)) return;
+
+      const result = await transport.executeCommand(active, text);
+      const resultCommand = parseSlashCommand(result.resolvedCommand)?.normalizedName ?? canonical;
+      if (result.kind === "prefill" || HISTORY_MUTATING_COMMANDS.has(resultCommand)) {
+        await refreshCommandHistory(active);
+      }
+      if (CATALOG_MUTATING_COMMANDS.has(resultCommand)) {
+        if (result.kind === "send") catalogRefreshAfterRunRef.current = true;
+        else await queryClient.invalidateQueries({ queryKey: ["hermes-commands"] });
+      }
+      if (result.warning) appendSystemMessage(result.warning);
+      if (result.kind === "output") {
+        appendSystemMessage(result.output);
+      } else if (result.kind === "prefill") {
+        setDraft(activeKey, result.message);
+        if (result.notice) appendSystemMessage(result.notice);
+      } else {
+        if (result.notice) appendSystemMessage(result.notice);
+        await sendCommandPrompt(active, result.message);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : tErrors("generic");
+      setTranscriptItems((current) => reduceTranscript(current, {
+        type: "message-status",
+        id: commandMessageId,
+        status: "error",
+      }));
+      appendSystemMessage(message);
+      setNotice({ kind: "error", message });
+    }
+  }
+
+  async function dispatchMessage(
+    source: string,
+    mode: "send" | "steer" = "send",
+    interpretSlash = true,
+  ) {
     const active = identityRef.current;
     if (!active) return;
     const activeKey = chatSessionScopeKey(activeProfile, active.storedId);
     const readyAttachments = (useChatUiStore.getState().attachments[activeKey] ?? []).filter(
       (attachment) => attachment.status === "ready",
     );
+    const baseText = source.trim() || (locale === "fa" ? "فایل پیوست‌شده را بررسی کن." : "Please review the attached file.");
+    const slashCommand = interpretSlash ? parseSlashCommand(baseText) : null;
+    if (slashCommand) {
+      await dispatchSlashCommand(baseText, slashCommand, active, activeKey);
+      return;
+    }
+
     const fileReferences = [...new Set(
       readyAttachments
         .filter((attachment) => attachment.kind === "file")
         .map((attachment) => attachment.refText)
         .filter((reference): reference is string => Boolean(reference)),
     )];
-    const baseText = source.trim() || (locale === "fa" ? "فایل پیوست‌شده را بررسی کن." : "Please review the attached file.");
     const text = [
       baseText,
-      ...(baseText.startsWith("/") ? [] : fileReferences.filter((reference) => !baseText.includes(reference))),
+      ...fileReferences.filter((reference) => !baseText.includes(reference)),
     ].join("\n\n");
     if (!text) return;
     if (mode === "steer") {
@@ -1399,8 +1838,6 @@ export function ChatShell({
       setDraft(activeKey, "");
       return;
     }
-    const isCommand = text.startsWith("/")
-      && commands.some((command) => text === `/${command.name}` || text.startsWith(`/${command.name} `));
     const userMessage: ChatMessage = {
       id: localId("user"),
       role: "user",
@@ -1408,40 +1845,19 @@ export function ChatShell({
       rawSource: text,
       createdAt: new Date().toISOString(),
       status: "complete",
-      ...(isCommand
-        ? {}
-        : {
-            userOrdinal: transcriptItems.reduce(
-              (max, item) => item.kind === "message" && item.message.userOrdinal !== undefined
-                ? Math.max(max, item.message.userOrdinal)
-                : max,
-              -1,
-            ) + 1,
-          }),
+      userOrdinal: transcriptItems.reduce(
+        (max, item) => item.kind === "message" && item.message.userOrdinal !== undefined
+          ? Math.max(max, item.message.userOrdinal)
+          : max,
+        -1,
+      ) + 1,
     };
     setTranscriptItems((current) => reduceTranscript(current, { type: "append-message", message: userMessage }));
     setRunning(true);
     try {
-      if (isCommand) {
-        const result = await transport.command(active, text);
-        setTranscriptItems((current) => reduceTranscript(current, {
-          type: "append-message",
-          message: {
-            id: localId("command"),
-            role: "system",
-            content: result.output,
-            rawSource: result.output,
-            createdAt: new Date().toISOString(),
-            status: "complete",
-          },
-        }));
-        setRunning(false);
-        setDraft(activeKey, "");
-      } else {
-        await transport.send(active, text);
-        setDraft(activeKey, "");
-        clearSubmittedAttachments(activeKey, readyAttachments.map((attachment) => attachment.id));
-      }
+      await transport.send(active, text);
+      setDraft(activeKey, "");
+      clearSubmittedAttachments(activeKey, readyAttachments.map((attachment) => attachment.id));
     } catch (error) {
       setRunning(false);
       setTranscriptItems((current) => reduceTranscript(current, {
@@ -1518,7 +1934,7 @@ export function ChatShell({
     const next = shiftQueuedPrompt(chatSessionScopeKey(activeProfile, identity.storedId));
     if (!next) return;
     processingQueueRef.current = true;
-    void dispatchMessage(next).finally(() => {
+    void dispatchMessage(next, "send", false).finally(() => {
       processingQueueRef.current = false;
     });
     // dispatchMessage reads current connection/session refs; queue length triggers this effect.
@@ -1731,8 +2147,8 @@ export function ChatShell({
     }
   }
 
-  async function branchSession(name?: string) {
-    if (!identity) return;
+  async function branchSession(name?: string): Promise<SessionSnapshot | undefined> {
+    if (!identity) return undefined;
     setSessionActionBusy(true);
     try {
       const snapshot = await transport.sessionBranch(identity, name);
@@ -1741,9 +2157,11 @@ export function ChatShell({
       navigateToSession(snapshot.identity.storedId, "push", activeProfile);
       setSessionAction(null);
       await queryClient.invalidateQueries({ queryKey: ["hermes-sessions"] });
+      return snapshot;
     } catch (error) {
       refreshCapabilities();
       setNotice({ kind: "error", message: error instanceof Error ? error.message : tErrors("generic") });
+      return undefined;
     } finally {
       setSessionActionBusy(false);
     }
@@ -1997,19 +2415,7 @@ export function ChatShell({
             setMobileRail("artifacts");
           }}
           onModelChange={changeModel}
-          onProfileChange={async (profile) => {
-            resumeGenerationRef.current += 1;
-            identityRef.current = null;
-            activeStoredIdRef.current = undefined;
-            setActiveProfile(profile);
-            setIdentity(null);
-            setRunning(false);
-            setTranscriptItems([]);
-            domainPromptsRef.current.clear();
-            setActiveStoredId(undefined);
-            router.push(`/${locale}?profile=${encodeURIComponent(profile)}`);
-            await queryClient.invalidateQueries({ queryKey: ["hermes-sessions"] });
-          }}
+          onProfileChange={openProfileWorkspace}
           onReasoningChange={setSessionReasoning}
           onBranch={() => setSessionAction("branch")}
           onCompress={() => setSessionAction("compress")}
@@ -2088,6 +2494,8 @@ export function ChatShell({
           attachments={attachments}
           queue={queue}
           commands={commands}
+          slashAvailable={slashAvailable}
+          slashUnavailableReason={slashUnavailableReason}
           disabled={!identity || connection !== "connected" || loadingSession}
           running={running}
           attachmentsEnabled={capabilities?.attachments === true}
@@ -2120,6 +2528,7 @@ export function ChatShell({
           onRemoveQueued={(index) => removeQueuedPrompt(composerKey, index)}
           onVoice={transcribe}
           onVoiceError={(message) => setNotice({ kind: "warning", message })}
+          onCompleteSlash={completeSlash}
         />
       </section>
 
@@ -2248,7 +2657,9 @@ export function ChatShell({
         locale={locale}
         models={models}
         onOpenChange={setNewSessionOpen}
-        onSubmit={createSession}
+        onSubmit={async (input) => {
+          await createSession(input);
+        }}
         onValidateCwd={validateNewSessionCwd}
         open={newSessionOpen}
         pending={loadingSession}
@@ -2296,6 +2707,7 @@ export function ChatShell({
       <CommandPalette
         open={commandPaletteOpen}
         commands={commands}
+        unavailableReason={slashAvailable ? undefined : slashUnavailableReason}
         labels={{
           title: tCommands("title"),
           search: tCommands("search"),

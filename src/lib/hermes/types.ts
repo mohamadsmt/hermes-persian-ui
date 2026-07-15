@@ -430,6 +430,75 @@ export interface SendOptions {
   truncateBeforeUserOrdinal?: number
 }
 
+/** A command and its gateway-authored description from `commands.catalog`. */
+export type CommandPair = readonly [command: string, description: string]
+
+export interface CommandCategory {
+  name: string
+  pairs: CommandPair[]
+}
+
+/**
+ * Normalized form of Hermes' registry-backed slash-command catalog.
+ *
+ * The wire payload intentionally is not a flat command array: aliases live in
+ * `canon`, argument choices in `sub`, and category membership in
+ * `categories`. Skills may appear only in `pairs`.
+ */
+export interface CommandCatalog {
+  pairs: CommandPair[]
+  categories: CommandCategory[]
+  canon: Record<string, string>
+  sub: Record<string, string[]>
+  skillCount: number
+  warning?: string
+}
+
+export interface SlashCompletionItem {
+  text: string
+  display: string
+  meta: string
+}
+
+export interface SlashCompletionResult {
+  items: SlashCompletionItem[]
+  /** UTF-16 string offset at which the selected completion replaces input. */
+  replaceFrom: number
+}
+
+export type CommandExecutionSource = "slash.exec" | "command.dispatch"
+
+/** Structured directive returned after aliases have been fully resolved. */
+export type CommandExecutionResult =
+  | {
+      kind: "output"
+      output: string
+      warning?: string
+      source: CommandExecutionSource
+      resolvedCommand: string
+      aliasDepth: number
+    }
+  | {
+      kind: "send"
+      message: string
+      notice?: string
+      warning?: string
+      skillName?: string
+      source: CommandExecutionSource
+      resolvedCommand: string
+      aliasDepth: number
+    }
+  | {
+      kind: "prefill"
+      message: string
+      notice?: string
+      warning?: string
+      source: CommandExecutionSource
+      resolvedCommand: string
+      aliasDepth: number
+    }
+
+/** @deprecated Use `CommandExecutionResult` via `executeCommand`. */
 export interface CommandResult {
   output: string
   warning?: string
@@ -468,6 +537,14 @@ export interface HermesTransport {
   models(session?: SessionIdentity | string): Promise<ModelOption[]>
   setModel(session: SessionIdentity | string, model: string, provider?: string): Promise<void>
   attach(session: SessionIdentity | string, input: AttachmentInput): Promise<Attachment>
+  commandCatalog(session?: SessionIdentity | string): Promise<CommandCatalog>
+  completeSlash(
+    session: SessionIdentity | string | undefined,
+    text: string,
+    signal?: AbortSignal,
+  ): Promise<SlashCompletionResult>
+  executeCommand(session: SessionIdentity | string, command: string): Promise<CommandExecutionResult>
+  /** @deprecated Use `executeCommand` to preserve send/skill/prefill directives. */
   command(session: SessionIdentity | string, command: string): Promise<CommandResult>
 
   respondToClarification(prompt: Extract<PendingPrompt, { kind: "clarification" }>, answer: string): Promise<boolean>

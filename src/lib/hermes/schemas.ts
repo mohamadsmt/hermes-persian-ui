@@ -248,8 +248,125 @@ export const rawModelOptionsSchema = z
   })
   .passthrough()
 
+export const commandPairSchema = z.tuple([z.string().min(1), z.string()])
+
+/** Exact gateway shape returned by `commands.catalog`, normalized at the edge. */
+export const commandCatalogSchema = z
+  .object({
+    pairs: z.array(commandPairSchema).default([]),
+    categories: z
+      .array(
+        z
+          .object({
+            name: z.string().min(1),
+            pairs: z.array(commandPairSchema).default([]),
+          })
+          .passthrough(),
+      )
+      .default([]),
+    canon: z.record(z.string(), z.string()).default({}),
+    sub: z.record(z.string(), z.array(z.string())).default({}),
+    skill_count: z.number().int().nonnegative().default(0),
+    warning: z.string().optional(),
+  })
+  .passthrough()
+  .transform((catalog) => ({
+    pairs: catalog.pairs,
+    categories: catalog.categories.map((category) => ({
+      name: category.name,
+      pairs: category.pairs,
+    })),
+    canon: catalog.canon,
+    sub: catalog.sub,
+    skillCount: catalog.skill_count,
+    ...(catalog.warning ? { warning: catalog.warning } : {}),
+  }))
+
+export const slashCompletionItemSchema = z
+  .object({
+    text: z.string(),
+    display: z.string().optional(),
+    meta: z.string().optional(),
+  })
+  .passthrough()
+  .transform((item) => ({
+    text: item.text,
+    display: item.display ?? item.text,
+    meta: item.meta ?? "",
+  }))
+
+/** Exact `complete.slash` envelope, including its authoritative replacement offset. */
+export const slashCompletionResultSchema = z
+  .object({
+    items: z.array(slashCompletionItemSchema).default([]),
+    replace_from: z.number().int().nonnegative().optional(),
+  })
+  .passthrough()
+  .transform((result) => ({
+    items: result.items,
+    replaceFrom: result.replace_from ?? 0,
+  }))
+
+const commandWarningFields = {
+  warning: z.string().optional(),
+  notice: z.string().optional(),
+}
+
+export const commandDispatchDirectiveSchema = z.discriminatedUnion("type", [
+  z
+    .object({
+      type: z.enum(["output", "exec", "plugin"]),
+      output: z.string().optional(),
+      ...commandWarningFields,
+    })
+    .passthrough(),
+  z
+    .object({
+      type: z.literal("send"),
+      message: z.string(),
+      ...commandWarningFields,
+    })
+    .passthrough(),
+  z
+    .object({
+      type: z.literal("skill"),
+      message: z.string(),
+      name: z.string().optional(),
+      ...commandWarningFields,
+    })
+    .passthrough(),
+  z
+    .object({
+      type: z.literal("prefill"),
+      message: z.string(),
+      ...commandWarningFields,
+    })
+    .passthrough(),
+  z
+    .object({
+      type: z.literal("alias"),
+      target: z.string().min(1),
+      ...commandWarningFields,
+    })
+    .passthrough(),
+])
+
+/** `slash.exec` can return either its legacy output envelope or a dispatch directive. */
+export const slashExecResponseSchema = z.union([
+  commandDispatchDirectiveSchema,
+  z
+    .object({
+      output: z.string(),
+      warning: z.string().optional(),
+      notice: z.string().optional(),
+    })
+    .passthrough(),
+])
+
 export type RawGatewayEvent = z.infer<typeof rawGatewayEventSchema>
 export type RawSessionMessage = z.infer<typeof rawSessionMessageSchema>
 export type RawSessionMessagesResponse = z.infer<typeof rawSessionMessagesResponseSchema>
 export type RawSessionRuntimeInfo = z.infer<typeof rawSessionRuntimeInfoSchema>
 export type RawSessionSnapshot = z.infer<typeof rawSessionSnapshotSchema>
+export type RawCommandDispatchDirective = z.infer<typeof commandDispatchDirectiveSchema>
+export type RawSlashExecResponse = z.infer<typeof slashExecResponseSchema>

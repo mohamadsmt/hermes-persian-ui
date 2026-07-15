@@ -16,15 +16,20 @@ import {
   ChangeEvent,
   ClipboardEvent,
   DragEvent,
+  Fragment,
   KeyboardEvent,
   useEffect,
   useLayoutEffect,
-  useMemo,
   useRef,
   useState,
 } from "react";
 
-import type { CommandOption, ComposerAttachment } from "./ui-types";
+import type {
+  CommandOption,
+  ComposerAttachment,
+  SlashCompletion,
+} from "./ui-types";
+import { filterCommandOptions } from "./command-catalog";
 
 type ComposerProps = {
   sessionId: string;
@@ -32,6 +37,8 @@ type ComposerProps = {
   attachments: ComposerAttachment[];
   queue: string[];
   commands: CommandOption[];
+  slashAvailable?: boolean;
+  slashUnavailableReason?: string;
   disabled?: boolean;
   running?: boolean;
   attachmentsEnabled?: boolean;
@@ -64,7 +71,17 @@ type ComposerProps = {
   onRemoveQueued: (index: number) => void;
   onVoice?: (blob: Blob) => Promise<void> | void;
   onVoiceError?: (message: string) => void;
+  onCompleteSlash?: (text: string, signal: AbortSignal) => Promise<SlashCompletion>;
 };
+
+type MenuOption = {
+  command: CommandOption;
+  insertText: string;
+  replaceFrom: number;
+  appendSpace: boolean;
+};
+
+const SLASH_COMPLETION_DEBOUNCE_MS = 100;
 
 function attachmentIcon(attachment: ComposerAttachment) {
   if (attachment.kind === "image") return ImageIcon;
@@ -76,6 +93,8 @@ export function Composer({
   attachments,
   queue,
   commands,
+  slashAvailable = true,
+  slashUnavailableReason,
   disabled,
   running,
   attachmentsEnabled = true,
@@ -90,6 +109,7 @@ export function Composer({
   onRemoveQueued,
   onVoice,
   onVoiceError,
+  onCompleteSlash,
 }: ComposerProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -103,22 +123,88 @@ export function Composer({
   const [recordingBlob, setRecordingBlob] = useState<Blob | null>(null);
   const [recordingUrl, setRecordingUrl] = useState<string | null>(null);
   const [selectedCommand, setSelectedCommand] = useState(0);
+  const [completionState, setCompletionState] = useState<{
+    input: string;
+    options: MenuOption[];
+  }>({ input: "", options: [] });
+  const [selectionStart, setSelectionStart] = useState<number | null>(null);
+  const [slashMenuDismissed, setSlashMenuDismissed] = useState(false);
   const hasReadyAttachment = attachments.some((attachment) => attachment.status === "ready");
   const attachmentBusy = attachments.some(
     (attachment) => attachment.status === "pending" || attachment.status === "uploading",
   );
 
-  const commandQuery = value.startsWith("/") ? value.slice(1).split(/\s/, 1)[0] : null;
-  const commandMatches = useMemo(() => {
-    if (commandQuery === null) return [];
-    const needle = commandQuery.toLocaleLowerCase();
-    return commands
-      .filter((command) => command.name.toLocaleLowerCase().includes(needle))
-      .slice(0, 8);
-  }, [commandQuery, commands]);
+  const cursorPosition = Math.max(0, Math.min(value.length, selectionStart ?? value.length));
+  const slashInput = value.slice(0, cursorPosition);
+  const commandQuery = slashInput.startsWith("/") && !/\s/u.test(slashInput.slice(1))
+    ? slashInput.slice(1)
+    : null;
+  const catalogOptions: MenuOption[] = commandQuery === null
+    ? []
+    : filterCommandOptions(commands, commandQuery).map((command) => ({
+        command,
+        insertText: command.name,
+        replaceFrom: 1,
+        appendSpace: true,
+      }));
+  const completionOptions = completionState.input === slashInput ? completionState.options : [];
+  const commandMatches = slashInput === "/" || !completionOptions.length
+    ? catalogOptions
+    : completionOptions;
+  const menuOpen = slashAvailable
+    && !slashMenuDismissed
+    && slashInput.startsWith("/")
+    && commandMatches.length > 0;
   const activeCommandIndex = commandMatches.length
     ? Math.min(selectedCommand, commandMatches.length - 1)
     : 0;
+
+  useEffect(() => {
+    if (
+      !slashAvailable
+      || !onCompleteSlash
+      || slashMenuDismissed
+      || !slashInput.startsWith("/")
+      || slashInput === "/"
+    ) {
+      return;
+    }
+
+    const controller = new AbortController();
+    let current = true;
+    const timer = window.setTimeout(() => {
+      void onCompleteSlash(slashInput, controller.signal).then((result) => {
+        if (!current || controller.signal.aborted) return;
+        const replaceFrom = Math.max(0, Math.min(slashInput.length, result.replaceFrom));
+        const prefix = slashInput.slice(0, replaceFrom);
+        const completingCommand = replaceFrom <= 1 && !/\s/u.test(slashInput.slice(1));
+        setCompletionState({ input: slashInput, options: result.items.map((item, index) => {
+          let insertText = item.text;
+          if (prefix.endsWith("/") && insertText.startsWith("/")) insertText = insertText.slice(1);
+          const display = (item.display || item.text).replace(/^\//u, "");
+          return {
+            command: {
+              name: display || `completion-${index}`,
+              ...(item.meta ? { description: item.meta } : {}),
+              source: "completion",
+            },
+            insertText,
+            replaceFrom,
+            appendSpace: completingCommand,
+          };
+        }) });
+      }).catch((error: unknown) => {
+        if (!current || controller.signal.aborted || (error instanceof DOMException && error.name === "AbortError")) return;
+        setCompletionState({ input: slashInput, options: [] });
+      });
+    }, SLASH_COMPLETION_DEBOUNCE_MS);
+
+    return () => {
+      current = false;
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [onCompleteSlash, slashAvailable, slashInput, slashMenuDismissed]);
 
   useLayoutEffect(() => {
     const textarea = textareaRef.current;
@@ -167,19 +253,33 @@ export function Composer({
     else void onSend(trimmed);
   }
 
-  function selectCommand(command: CommandOption) {
-    const next = `/${command.name} `;
+  function selectCommand(option: MenuOption) {
+    const textarea = textareaRef.current;
+    const liveCursor = textarea && document.activeElement === textarea
+      ? textarea.selectionStart
+      : cursorPosition;
+    const cursor = Math.max(
+      option.replaceFrom,
+      Math.min(value.length, liveCursor),
+    );
+    const prefix = value.slice(0, option.replaceFrom);
+    const suffix = option.appendSpace && !option.insertText.endsWith(" ") ? " " : "";
+    const inserted = `${prefix}${option.insertText}${suffix}`;
+    const next = `${inserted}${value.slice(cursor)}`;
+    const nextCursor = inserted.length;
     setSelectedCommand(0);
+    setSelectionStart(nextCursor);
+    setSlashMenuDismissed(true);
     onChange(next);
     requestAnimationFrame(() => {
       textareaRef.current?.focus();
-      textareaRef.current?.setSelectionRange(next.length, next.length);
+      textareaRef.current?.setSelectionRange(nextCursor, nextCursor);
     });
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (composingRef.current || event.nativeEvent.isComposing) return;
-    if (commandMatches.length && commandQuery !== null) {
+    if (menuOpen) {
       if (event.key === "ArrowDown") {
         event.preventDefault();
         setSelectedCommand((index) => (index + 1) % commandMatches.length);
@@ -192,9 +292,15 @@ export function Composer({
         );
         return;
       }
-      if (event.key === "Tab") {
+      if (event.key === "Tab" || event.key === "Enter") {
         event.preventDefault();
-        selectCommand(commandMatches[activeCommandIndex] ?? commandMatches[0]);
+        const option = commandMatches[activeCommandIndex] ?? commandMatches[0];
+        if (option) selectCommand(option);
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setSlashMenuDismissed(true);
         return;
       }
     }
@@ -370,22 +476,43 @@ export function Composer({
       ) : null}
 
       <div className="composer" data-testid="composer">
-        {commandMatches.length ? (
-          <div className="command-menu" role="listbox" aria-label={labels.commandPalette}>
-            {commandMatches.map((command, index) => (
-              <button
-                type="button"
-                role="option"
-                aria-selected={index === activeCommandIndex}
-                className={index === activeCommandIndex ? "command-option--selected" : undefined}
-                key={command.name}
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => selectCommand(command)}
-              >
-                <bdi dir="ltr">/{command.name}</bdi>
-                <span>{command.description}</span>
-              </button>
-            ))}
+        {menuOpen ? (
+          <div id="slash-command-menu" className="command-menu" role="listbox" aria-label={labels.commandPalette}>
+            {commandMatches.map((option, index) => {
+              const command = option.command;
+              const previousCategory = commandMatches[index - 1]?.command.categoryLabel;
+              return (
+                <Fragment key={`${command.source ?? "catalog"}:${command.name}:${option.insertText}:${index}`}>
+                  {command.categoryLabel && command.categoryLabel !== previousCategory ? (
+                    <div className="command-menu__group" role="presentation">
+                      {command.categoryLabel}
+                    </div>
+                  ) : null}
+                  <button
+                    id={`slash-option-${index}`}
+                    type="button"
+                    role="option"
+                    aria-selected={index === activeCommandIndex}
+                    className={index === activeCommandIndex ? "command-option--selected" : undefined}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onMouseEnter={() => setSelectedCommand(index)}
+                    onClick={() => selectCommand(option)}
+                  >
+                    <bdi dir="ltr">
+                      {command.source === "completion" && option.replaceFrom > 1
+                        ? command.name
+                        : `/${command.name}`}
+                    </bdi>
+                    <span dir="auto">{command.description}</span>
+                  </button>
+                </Fragment>
+              );
+            })}
+          </div>
+        ) : null}
+        {!slashAvailable && value.startsWith("/") && slashUnavailableReason ? (
+          <div className="command-menu command-menu--unavailable" role="status" dir="auto">
+            {slashUnavailableReason}
           </div>
         ) : null}
 
@@ -394,7 +521,16 @@ export function Composer({
           value={value}
           onChange={(event: ChangeEvent<HTMLTextAreaElement>) => {
             setSelectedCommand(0);
+            setSelectionStart(event.target.selectionStart);
+            setSlashMenuDismissed(false);
             onChange(event.target.value);
+          }}
+          onSelect={(event) => {
+            setSelectionStart(event.currentTarget.selectionStart);
+          }}
+          onClick={(event) => {
+            setSelectionStart(event.currentTarget.selectionStart);
+            setSlashMenuDismissed(false);
           }}
           onKeyDown={onKeyDown}
           onPaste={onPaste}
@@ -406,6 +542,12 @@ export function Composer({
           }}
           placeholder={labels.placeholder}
           aria-label={labels.placeholder}
+          role="combobox"
+          aria-autocomplete="list"
+          aria-activedescendant={menuOpen ? `slash-option-${activeCommandIndex}` : undefined}
+          aria-controls={menuOpen ? "slash-command-menu" : undefined}
+          aria-expanded={menuOpen}
+          aria-haspopup="listbox"
           dir="auto"
           disabled={disabled}
           rows={1}

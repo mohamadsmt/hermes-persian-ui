@@ -26,6 +26,15 @@ async function settleVisualPage(page: Page): Promise<void> {
   });
 }
 
+async function settleSlashVisual(page: Page): Promise<void> {
+  // The partially obscured empty-state SVG can rasterize a handful of pixels
+  // differently under parallel Chromium load. It is outside the slash surface.
+  await page.addStyleTag({
+    content: ".transcript-empty__icon { visibility: hidden !important; }",
+  });
+  await settleVisualPage(page);
+}
+
 async function openWorkspaceModule(
   page: Page,
   locale: "en" | "fa",
@@ -135,6 +144,38 @@ async function waitForSyntaxHighlight(page: Page): Promise<void> {
   await page.evaluate(
     () => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))),
   );
+}
+
+for (const locale of ["fa", "en"] as const) {
+  test(`desktop ${locale === "fa" ? "RTL" : "LTR"} slash command menu @visual`, async ({ app, page }, testInfo) => {
+    test.skip(testInfo.project.name !== "chromium", "desktop slash baseline");
+    await page.clock.setFixedTime(FIXED_VISUAL_TIME);
+    await app.open(locale);
+    await app.ensureSession();
+    await app.composer.fill("/");
+    await expect(page.getByRole("listbox", { name: /فرمان‌های هرمس|Hermes commands/iu })).toBeVisible();
+    await settleSlashVisual(page);
+    await expect(page).toHaveScreenshot(`desktop-${locale === "fa" ? "rtl" : "ltr"}-slash-menu.png`, {
+      animations: "disabled",
+      caret: "hide",
+      fullPage: true,
+    });
+  });
+
+  test(`mobile ${locale === "fa" ? "RTL" : "LTR"} slash command menu @visual`, async ({ app, page }, testInfo) => {
+    test.skip(testInfo.project.name !== "mobile", "mobile slash baseline");
+    await page.clock.setFixedTime(FIXED_VISUAL_TIME);
+    await app.open(locale);
+    await app.ensureSession();
+    await app.composer.fill("/");
+    await expect(page.getByRole("listbox", { name: /فرمان‌های هرمس|Hermes commands/iu })).toBeVisible();
+    await settleSlashVisual(page);
+    await expect(page).toHaveScreenshot(`mobile-${locale === "fa" ? "rtl" : "ltr"}-slash-menu.png`, {
+      animations: "disabled",
+      caret: "hide",
+      fullPage: true,
+    });
+  });
 }
 
 test("desktop RTL light with mixed BiDi content @visual", async ({ app, page }, testInfo) => {
