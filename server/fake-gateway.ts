@@ -146,6 +146,8 @@ interface FakeSession {
   attachmentCount: number
   abort?: AbortController
   pendingApproval?: { resolve(choice: string): void }
+  inflightUser?: string
+  inflightAssistant?: string
 }
 
 interface RpcRequest {
@@ -165,9 +167,12 @@ function findLastUserMessageIndex(messages: FakeMessage[]): number {
 export class FakeHermesGatewayState {
   readonly sessionsByRuntime = new Map<string, FakeSession>()
   readonly sessionsByStored = new Map<string, FakeSession>()
+  readonly sockets = new Set<WebSocket>()
   sessionSequence = 0
   branchSequence = 0
   messageSequence = 0
+  failNextCreate = false
+  failNextActivateRuntimeId?: string
 }
 
 /** Source-only deterministic adapter injected by dev and smoke entrypoints. */
@@ -184,6 +189,11 @@ export class FakeHermesGatewayAdapter implements TestGatewayAdapter {
   }
 
   close(): void {
+    for (const state of this.states.values()) {
+      for (const session of state.sessionsByRuntime.values()) session.abort?.abort()
+      for (const socket of state.sockets) socket.close(1001, "fake gateway shutdown")
+      state.sockets.clear()
+    }
     this.states.clear()
   }
 }
@@ -195,10 +205,11 @@ export class FakeHermesGateway {
   ) {}
 
   start(): void {
-    this.emit("gateway.ready", undefined, { skin: null, desktop_contract: 4 })
+    this.state.sockets.add(this.socket)
+    this.sendEvent(this.socket, "gateway.ready", undefined, { skin: null, desktop_contract: 4 })
     this.socket.on("message", (data) => this.handle(data.toString()))
     this.socket.on("close", () => {
-      for (const session of this.state.sessionsByRuntime.values()) session.abort?.abort()
+      this.state.sockets.delete(this.socket)
     })
   }
 
@@ -230,6 +241,10 @@ export class FakeHermesGateway {
   private async dispatch(method: string, params: Record<string, unknown>): Promise<{ result: unknown; after?: () => void }> {
     switch (method) {
       case "session.create": {
+        if (this.state.failNextCreate) {
+          this.state.failNextCreate = false
+          throw new FakeRpcError(4090, "maximum concurrent sessions reached")
+        }
         const session = this.createSession(params)
         return { result: this.snapshot(session, true) }
       }
@@ -250,20 +265,32 @@ export class FakeHermesGateway {
         return { result: { count: session.messages.length, messages: session.messages } }
       }
       case "session.active_list": {
+        const currentRuntimeId = stringValue(params.current_session_id)
         return {
           result: {
             sessions: [...this.state.sessionsByRuntime.values()].filter((session) => session.active).map((session) => ({
               id: session.runtimeId,
               session_key: session.storedId,
+              current: session.runtimeId === currentRuntimeId,
               title: session.title,
+              preview: session.messages.at(-1)?.content ?? session.inflightUser ?? "",
               model: session.model,
               message_count: session.messages.length,
               started_at: session.createdAt,
               last_active: session.createdAt + this.state.messageSequence,
-              status: session.running ? "streaming" : "idle",
+              status: this.liveStatus(session),
             })),
           },
         }
+      }
+      case "session.activate": {
+        const session = this.requireRuntimeSession(params)
+        if (this.state.failNextActivateRuntimeId === session.runtimeId) {
+          this.state.failNextActivateRuntimeId = undefined
+          throw new FakeRpcError(4001, "runtime activation failed")
+        }
+        session.active = true
+        return { result: this.snapshot(session) }
       }
       case "session.title": {
         const session = this.requireRuntimeSession(params)
@@ -344,6 +371,8 @@ export class FakeHermesGateway {
         session.running = false
         session.pendingApproval?.resolve("deny")
         session.pendingApproval = undefined
+        session.inflightUser = undefined
+        session.inflightAssistant = undefined
         if (wasRunning) {
           this.emit("message.complete", session.runtimeId, { text: "", status: "interrupted" })
           this.emit("session.info", session.runtimeId, this.info(session))
@@ -369,6 +398,8 @@ export class FakeHermesGateway {
         }
         session.running = true
         session.messages.push(this.message("user", text))
+        session.inflightUser = text
+        session.inflightAssistant = ""
         return { result: { status: "streaming" }, after: () => void this.runPrompt(session, text) }
       }
       case "model.options": {
@@ -599,6 +630,26 @@ export class FakeHermesGateway {
       case "secret.respond": {
         return { result: { status: "ok" } }
       }
+      case "test.fail_next": {
+        const operation = stringValue(params.operation)
+        if (operation === "create") this.state.failNextCreate = true
+        else if (operation === "activate") {
+          const runtimeId = stringValue(params.session_id)
+          if (!runtimeId) throw new FakeRpcError(4002, "session_id is required")
+          this.state.failNextActivateRuntimeId = runtimeId
+        } else {
+          throw new FakeRpcError(4002, "unsupported test operation")
+        }
+        return { result: { configured: operation } }
+      }
+      case "test.disconnect_all": {
+        return {
+          result: { disconnected: this.state.sockets.size },
+          after: () => {
+            for (const socket of this.state.sockets) socket.close(1012, "deterministic reconnect test")
+          },
+        }
+      }
       default:
         throw new FakeRpcError(-32601, `method not found: ${method}`)
     }
@@ -809,6 +860,8 @@ export class FakeHermesGateway {
       if (session.abort === abort) session.abort = undefined
       if (!abort.signal.aborted) {
         session.running = false
+        session.inflightUser = undefined
+        session.inflightAssistant = undefined
         this.emit("session.info", session.runtimeId, this.info(session))
       }
     }
@@ -825,6 +878,8 @@ export class FakeHermesGateway {
   private async complete(session: FakeSession, text: string): Promise<void> {
     session.messages.push(this.message("assistant", text))
     session.running = false
+    session.inflightUser = undefined
+    session.inflightAssistant = undefined
     this.emit("message.complete", session.runtimeId, {
       text,
       status: "complete",
@@ -841,7 +896,16 @@ export class FakeHermesGateway {
       messages: session.messages,
       info: this.info(session),
       running: session.running,
-      status: session.running ? "streaming" : "idle",
+      status: this.liveStatus(session),
+      ...(session.inflightUser === undefined && session.inflightAssistant === undefined
+        ? {}
+        : {
+            inflight: {
+              user: session.inflightUser ?? "",
+              assistant: session.inflightAssistant ?? "",
+              streaming: session.running,
+            },
+          }),
       ...(created ? {} : { resumed: session.storedId }),
     }
   }
@@ -901,6 +965,12 @@ export class FakeHermesGateway {
     return session
   }
 
+  private liveStatus(session: FakeSession): "idle" | "starting" | "waiting" | "working" {
+    if (session.pendingApproval) return "waiting"
+    if (session.running) return session.inflightAssistant === undefined ? "starting" : "working"
+    return "idle"
+  }
+
   private message(
     role: FakeMessage["role"],
     content: string,
@@ -910,11 +980,21 @@ export class FakeHermesGateway {
   }
 
   private emit(type: string, sessionId?: string, payload?: Record<string, unknown>): void {
-    this.send({
+    const session = sessionId ? this.state.sessionsByRuntime.get(sessionId) : undefined
+    if (session && type === "message.start") session.inflightAssistant = ""
+    if (session && type === "message.delta") {
+      session.inflightAssistant = `${session.inflightAssistant ?? ""}${stringValue(payload?.text)}`
+    }
+    for (const socket of this.state.sockets) this.sendEvent(socket, type, sessionId, payload)
+  }
+
+  private sendEvent(socket: WebSocket, type: string, sessionId?: string, payload?: Record<string, unknown>): void {
+    if (socket.readyState !== socket.OPEN) return
+    socket.send(JSON.stringify({
       jsonrpc: "2.0",
       method: "event",
       params: { type, ...(sessionId ? { session_id: sessionId } : {}), ...(payload ? { payload } : {}) },
-    })
+    }))
   }
 
   private send(frame: unknown): void {

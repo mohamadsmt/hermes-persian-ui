@@ -84,6 +84,27 @@ export const rawSessionRuntimeInfoSchema = z
   })
   .passthrough()
 
+export const liveSessionStatusSchema = z.enum(["idle", "starting", "waiting", "working"])
+
+export const rawActiveSessionItemSchema = z
+  .object({
+    current: z.boolean().optional(),
+    id: z.string().min(1),
+    last_active: z.number().optional(),
+    message_count: z.number().int().nonnegative().optional(),
+    model: z.string().optional(),
+    preview: z.string().optional(),
+    session_key: z.string().min(1).optional(),
+    started_at: z.number().optional(),
+    status: liveSessionStatusSchema,
+    title: z.string().optional(),
+  })
+  .passthrough()
+
+export const rawActiveSessionListSchema = z
+  .object({ sessions: z.array(rawActiveSessionItemSchema).default([]) })
+  .passthrough()
+
 export const rawSessionMessageSchema = z
   .object({
     role: z.enum(["assistant", "system", "tool", "user"]),
@@ -106,6 +127,7 @@ export const rawSessionSnapshotSchema = z
     resumed: z.string().optional(),
     message_count: z.number().int().nonnegative().optional(),
     messages: z.array(rawSessionMessageSchema).default([]),
+    started_at: z.number().optional(),
     info: rawSessionRuntimeInfoSchema.optional(),
     inflight: z
       .object({
@@ -364,6 +386,7 @@ export const slashExecResponseSchema = z.union([
 ])
 
 export type RawGatewayEvent = z.infer<typeof rawGatewayEventSchema>
+export type RawActiveSessionItem = z.infer<typeof rawActiveSessionItemSchema>
 export type RawSessionMessage = z.infer<typeof rawSessionMessageSchema>
 export type RawSessionMessagesResponse = z.infer<typeof rawSessionMessagesResponseSchema>
 export type RawSessionRuntimeInfo = z.infer<typeof rawSessionRuntimeInfoSchema>

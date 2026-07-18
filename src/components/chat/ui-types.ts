@@ -1,3 +1,5 @@
+import type { LiveSessionStatus } from "@/lib/hermes";
+
 export type ConnectionPhase =
   | "connecting"
   | "connected"
@@ -18,6 +20,17 @@ export type SessionSummary = {
   messageCount?: number;
   profile?: string;
   model?: string;
+  /** Whether this conversation currently owns a live Hermes runtime. */
+  live?: boolean;
+  /** Current state of the live runtime, when one exists. */
+  runtimeStatus?: LiveSessionStatus;
+  /** Whether the runtime is waiting for an approval or clarification. */
+  needsInput?: boolean;
+  /** Whether background activity completed since the conversation was viewed. */
+  unread?: boolean;
+  /** Latest runtime error associated with this conversation. */
+  error?: string;
+  /** @deprecated Prefer `live` and `runtimeStatus`; retained during migration. */
   status?: string;
 };
 

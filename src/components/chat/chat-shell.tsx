@@ -32,8 +32,10 @@ import {
   type SessionSummary as HermesSessionSummary,
   type UsageStats,
   type WorkspaceEntry,
+  isMethodNotFound,
 } from "@/lib/hermes";
 import { chatSessionScopeKey, useChatUiStore } from "@/store/chat-store";
+import { useSessionRuntimeStore } from "@/store/session-runtime-store";
 import { useHermesWorkspace } from "@/components/workspace/workspace-provider";
 
 import { ArtifactRail } from "./artifact-rail";
@@ -119,6 +121,7 @@ const UI_COMMAND_ALIASES: Readonly<Record<string, string>> = {
   learning: "journey",
   "memory-graph": "journey",
 };
+const EMPTY_TRANSCRIPT_ITEMS: TranscriptItem[] = [];
 
 function record(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === "object" ? (value as Record<string, unknown>) : {};
@@ -295,11 +298,35 @@ export function ChatShell({
   identityRef.current = identity;
   const [activeStoredId, setActiveStoredId] = useState(storedSessionId);
   const [sessionTitle, setSessionTitle] = useState(tSessions("untitled"));
-  const [transcriptItems, setTranscriptItems] = useState<TranscriptItem[]>([]);
-  const domainPromptsRef = useRef(new Map<string, PendingPrompt>());
-  const [running, setRunning] = useState(false);
+  const selectedRuntimeSession = useSessionRuntimeStore((state) => (
+    state.selectedScopeKey ? state.sessions[state.selectedScopeKey] : undefined
+  ));
+  const runtimeSessions = useSessionRuntimeStore((state) => state.sessions);
+  const transcriptItems = selectedRuntimeSession?.transcriptItems ?? EMPTY_TRANSCRIPT_ITEMS;
+  const running = selectedRuntimeSession?.running ?? false;
+  const eventScopeRef = useRef<string | null>(null);
+  const setTranscriptItems = useCallback((update: TranscriptItem[] | ((current: TranscriptItem[]) => TranscriptItem[])) => {
+    const runtimeState = useSessionRuntimeStore.getState();
+    const scopeKey = eventScopeRef.current ?? runtimeState.selectedScopeKey;
+    if (!scopeKey) return;
+    runtimeState.updateTranscript(
+      { scopeKey },
+      typeof update === "function" ? update : () => update,
+    );
+  }, []);
+  const setRunning = useCallback((value: boolean) => {
+    const runtimeState = useSessionRuntimeStore.getState();
+    const scopeKey = eventScopeRef.current ?? runtimeState.selectedScopeKey;
+    if (!scopeKey) return;
+    runtimeState.updateLiveState({ scopeKey }, {
+      running: value,
+      status: value ? "working" : "idle",
+    });
+  }, []);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [activeProfile, setActiveProfile] = useState(initialProfile ?? "default");
+  const activeProfileRef = useRef(activeProfile);
+  activeProfileRef.current = activeProfile;
   const [profiles, setProfiles] = useState<string[]>(["default"]);
   const [gatewayContract, setGatewayContract] = useState<number | undefined>();
   const [loadingSession, setLoadingSession] = useState(false);
@@ -335,12 +362,10 @@ export function ChatShell({
   const lastReasoningIdRef = useRef<string | null>(null);
   const reasoningSeenRef = useRef(false);
   const assistantPartSequenceRef = useRef(0);
-  const processingQueueRef = useRef(false);
+  const drainingSessionScopesRef = useRef(new Set<string>());
+  const activeListInFlightRef = useRef(false);
   const catalogRefreshAfterRunRef = useRef(false);
   const speechPlaybackRef = useRef<SpeechPlayback | null>(null);
-  const resumeStoredSessionRef = useRef<(storedId: string, replacePath?: boolean) => Promise<void>>(
-    async () => undefined,
-  );
 
   const openMobileRail = useChatUiStore((state) => state.openMobileRail);
   const setMobileRail = useChatUiStore((state) => state.setMobileRail);
@@ -358,7 +383,6 @@ export function ChatShell({
   const enqueuePrompt = useChatUiStore((state) => state.enqueuePrompt);
   const replaceQueuedPrompt = useChatUiStore((state) => state.replaceQueuedPrompt);
   const removeQueuedPrompt = useChatUiStore((state) => state.removeQueuedPrompt);
-  const shiftQueuedPrompt = useChatUiStore((state) => state.shiftQueuedPrompt);
   const attachmentsBySession = useChatUiStore((state) => state.attachments);
   const setAttachments = useChatUiStore((state) => state.setAttachments);
   const modelSettings = useChatUiStore((state) => state.modelSettings);
@@ -448,14 +472,30 @@ export function ChatShell({
     setFeatureSupport("recovery", gatewayContract !== undefined && gatewayContract >= 4 ? "available" : "unavailable");
   }, [capabilities?.gateway, connection, gatewayContract, setFeatureSupport]);
 
-  const flushDeltas = useCallback(() => {
-    deltaFrameRef.current = null;
-    const delta = pendingDeltasRef.current.join("");
-    pendingDeltasRef.current = [];
+  const flushDeltas = useCallback((requestedScopeKey?: string) => {
+    const runtimeStore = useSessionRuntimeStore.getState();
+    const scopeKey = requestedScopeKey ?? eventScopeRef.current ?? runtimeStore.selectedScopeKey;
+    if (!scopeKey) return;
+    const session = runtimeStore.sessions[scopeKey];
+    if (!session) return;
+    const delta = session.stream.pendingTextDeltas.join("");
+    const sequence = session.stream.assistantPartSequence;
+    const id = session.stream.assistantMessageId
+      ?? `${session.stream.assistantRunId ?? localId("assistant")}:text:${sequence}`;
+    runtimeStore.setStreamMetadata({ scopeKey }, {
+      pendingTextDeltas: [],
+      deltaFrameId: null,
+      assistantMessageId: delta ? id : session.stream.assistantMessageId,
+      assistantPartSequence: session.stream.assistantMessageId || !delta ? sequence : sequence + 1,
+    });
+    if (runtimeStore.selectedScopeKey === scopeKey) {
+      deltaFrameRef.current = null;
+      pendingDeltasRef.current = [];
+      assistantMessageIdRef.current = delta ? id : session.stream.assistantMessageId;
+      assistantPartSequenceRef.current = session.stream.assistantMessageId || !delta ? sequence : sequence + 1;
+    }
     if (!delta) return;
-    const id = assistantMessageIdRef.current ?? `${assistantRunIdRef.current ?? localId("assistant")}:text:${assistantPartSequenceRef.current++}`;
-    assistantMessageIdRef.current = id;
-    setTranscriptItems((current) => reduceTranscript(current, {
+    runtimeStore.updateTranscript({ scopeKey }, (current) => reduceTranscript(current, {
       type: "message-delta",
       id,
       delta,
@@ -464,11 +504,20 @@ export function ChatShell({
   }, []);
 
   const queueDelta = useCallback(
-    (delta: string) => {
+    (delta: string, requestedScopeKey?: string) => {
       if (!delta) return;
-      pendingDeltasRef.current.push(delta);
-      if (deltaFrameRef.current === null) {
-        deltaFrameRef.current = requestAnimationFrame(flushDeltas);
+      const runtimeStore = useSessionRuntimeStore.getState();
+      const scopeKey = requestedScopeKey ?? eventScopeRef.current ?? runtimeStore.selectedScopeKey;
+      if (!scopeKey) return;
+      const session = runtimeStore.sessions[scopeKey];
+      if (!session) return;
+      const pendingTextDeltas = [...session.stream.pendingTextDeltas, delta];
+      const deltaFrameId = session.stream.deltaFrameId
+        ?? requestAnimationFrame(() => flushDeltas(scopeKey));
+      runtimeStore.setStreamMetadata({ scopeKey }, { pendingTextDeltas, deltaFrameId });
+      if (runtimeStore.selectedScopeKey === scopeKey) {
+        pendingDeltasRef.current = pendingTextDeltas;
+        deltaFrameRef.current = deltaFrameId;
       }
     },
     [flushDeltas],
@@ -479,65 +528,31 @@ export function ChatShell({
       snapshot: SessionSnapshot,
       ownerProfile: string,
       historyMessages: Message[] = snapshot.messages,
+      options: { select?: boolean; expectedTranscriptRevision?: number } = {},
     ) => {
-      if (deltaFrameRef.current !== null) cancelAnimationFrame(deltaFrameRef.current);
-      deltaFrameRef.current = null;
-      pendingDeltasRef.current = [];
-      assistantRunIdRef.current = null;
-      assistantMessageIdRef.current = null;
-      reasoningIdRef.current = null;
-      lastReasoningIdRef.current = null;
-      reasoningSeenRef.current = false;
-      assistantPartSequenceRef.current = 0;
+      const runtimeStore = useSessionRuntimeStore.getState();
+      const scopeKey = runtimeStore.hydrateSnapshot(ownerProfile, snapshot, {
+        messages: historyMessages,
+        ...(options.expectedTranscriptRevision === undefined
+          ? {}
+          : { expectedTranscriptRevision: options.expectedTranscriptRevision }),
+        title: snapshot.info?.title || tSessions("untitled"),
+      });
+      const hydrated = useSessionRuntimeStore.getState().sessions[scopeKey];
+      if (options.select === false) return;
+      useSessionRuntimeStore.getState().selectSession({ scopeKey });
+      assistantRunIdRef.current = hydrated?.stream.assistantRunId ?? null;
+      assistantMessageIdRef.current = hydrated?.stream.assistantMessageId ?? null;
+      reasoningIdRef.current = hydrated?.stream.reasoningId ?? null;
+      lastReasoningIdRef.current = hydrated?.stream.lastReasoningId ?? null;
+      reasoningSeenRef.current = hydrated?.stream.reasoningSeen ?? false;
+      assistantPartSequenceRef.current = hydrated?.stream.assistantPartSequence ?? 0;
       identityRef.current = snapshot.identity;
       activeStoredIdRef.current = snapshot.identity.storedId;
       setIdentity(snapshot.identity);
       setActiveStoredId(snapshot.identity.storedId);
-      let nextTranscript = messagesToTranscript(historyMessages);
-      if (snapshot.inflight?.user) {
-        const lastMessage = [...nextTranscript].reverse().find((item) => item.kind === "message");
-        const duplicateUser = lastMessage?.kind === "message"
-          && lastMessage.message.role === "user"
-          && lastMessage.message.content === snapshot.inflight.user;
-        if (!duplicateUser) {
-          nextTranscript = reduceTranscript(nextTranscript, {
-            type: "append-message",
-            message: {
-              id: localId("user-inflight"),
-              role: "user",
-              content: snapshot.inflight.user,
-              rawSource: snapshot.inflight.user,
-              createdAt: new Date().toISOString(),
-              status: "complete",
-              userOrdinal: nextTranscript.reduce(
-                (max, item) => item.kind === "message" && item.message.userOrdinal !== undefined
-                  ? Math.max(max, item.message.userOrdinal)
-                  : max,
-                -1,
-              ) + 1,
-            },
-          });
-        }
-      }
-      if (snapshot.inflight?.assistant) {
-        const runId = localId("assistant-inflight");
-        const id = `${runId}:text:0`;
-        assistantRunIdRef.current = runId;
-        assistantMessageIdRef.current = id;
-        assistantPartSequenceRef.current = 1;
-        nextTranscript = reduceTranscript(nextTranscript, {
-          type: "message-complete",
-          id,
-          content: snapshot.inflight.assistant,
-          createdAt: new Date().toISOString(),
-          status: snapshot.inflight.streaming ? "streaming" : "complete",
-        });
-      }
-      setTranscriptItems(nextTranscript);
       setUsageDialog(null);
-      domainPromptsRef.current.clear();
-      setRunning(snapshot.running ?? snapshot.info?.running ?? snapshot.inflight?.streaming ?? false);
-      setSessionTitle(snapshot.info?.title || tSessions("untitled"));
+      setSessionTitle(hydrated?.title || snapshot.info?.title || tSessions("untitled"));
       if (snapshot.info?.contract !== undefined) setGatewayContract(snapshot.info.contract);
       setModelSettings(chatSessionScopeKey(ownerProfile, snapshot.identity.storedId), {
         ...(snapshot.info?.model ? { model: snapshot.info.model } : {}),
@@ -554,18 +569,49 @@ export function ChatShell({
   );
 
   const resumeStoredSession = useCallback(
-    async (storedId: string, replacePath = false, ownerProfile = activeProfile) => {
+    async (
+      storedId: string,
+      replacePath = false,
+      ownerProfileInput?: string,
+      transactional = false,
+    ): Promise<boolean> => {
+      const ownerProfile = ownerProfileInput ?? activeProfileRef.current;
       const generation = ++resumeGenerationRef.current;
       setLoadingSession(true);
       try {
-        // Read raw rows before resuming. The subsequent snapshot is then the
-        // freshness authority and can reject an older/incomplete history read.
-        const history = await transport.sessionMessages(storedId, ownerProfile).catch(() => null);
-        if (generation !== resumeGenerationRef.current || activeStoredIdRef.current !== storedId) return;
-        const snapshot = await transport.sessionResume(storedId, { profile: ownerProfile });
-        if (generation !== resumeGenerationRef.current || activeStoredIdRef.current !== storedId) return;
-        const durableMessages = reconcileSessionHistory(snapshot, history, storedId);
-        applySnapshot(snapshot, ownerProfile, durableMessages);
+        const runtimeStore = useSessionRuntimeStore.getState();
+        let known = runtimeStore.findByStored(ownerProfile, storedId);
+        if (known?.stream.pendingTextDeltas.length) {
+          flushDeltas(known.scopeKey);
+          known = useSessionRuntimeStore.getState().findByStored(ownerProfile, storedId);
+        }
+        const expectedTranscriptRevision = known?.transcriptRevision;
+        let snapshot: SessionSnapshot;
+        let durableMessages: Message[];
+        if (known?.identity.runtimeId) {
+          try {
+            snapshot = await transport.sessionActivate(known.identity.runtimeId);
+            durableMessages = snapshot.messages;
+          } catch (error) {
+            if (!isMethodNotFound(error)) throw error;
+            const history = await transport.sessionMessages(storedId, ownerProfile).catch(() => null);
+            snapshot = await transport.sessionResume(storedId, { profile: ownerProfile });
+            durableMessages = reconcileSessionHistory(snapshot, history, storedId);
+          }
+        } else {
+          // Read raw rows before resuming. The subsequent snapshot is then the
+          // freshness authority and can reject an older/incomplete history read.
+          const history = await transport.sessionMessages(storedId, ownerProfile).catch(() => null);
+          snapshot = await transport.sessionResume(storedId, { profile: ownerProfile });
+          durableMessages = reconcileSessionHistory(snapshot, history, storedId);
+        }
+        if (
+          generation !== resumeGenerationRef.current
+          || (!transactional && activeStoredIdRef.current !== storedId)
+        ) return false;
+        applySnapshot(snapshot, ownerProfile, durableMessages, {
+          ...(expectedTranscriptRevision === undefined ? {} : { expectedTranscriptRevision }),
+        });
         loadedStoredIdRef.current = storedId;
         setNotice(null);
         if (replacePath) {
@@ -573,25 +619,67 @@ export function ChatShell({
             `/${locale}/c/${encodeURIComponent(snapshot.identity.storedId)}?profile=${encodeURIComponent(ownerProfile)}`,
           );
         }
+        return true;
       } catch (error) {
-        if (generation !== resumeGenerationRef.current) return;
-        identityRef.current = null;
-        setIdentity(null);
-        setRunning(false);
+        if (generation !== resumeGenerationRef.current) return false;
+        if (!transactional) {
+          identityRef.current = null;
+          setIdentity(null);
+          setRunning(false);
+        }
         refreshCapabilities();
         setNotice({ kind: "error", message: error instanceof Error ? error.message : tErrors("generic") });
+        return false;
       } finally {
         if (generation === resumeGenerationRef.current) setLoadingSession(false);
       }
     },
-    [activeProfile, applySnapshot, locale, refreshCapabilities, router, tErrors, transport],
+    [applySnapshot, flushDeltas, locale, refreshCapabilities, router, setRunning, tErrors, transport],
   );
 
-  resumeStoredSessionRef.current = resumeStoredSession;
+  const rebindLiveSessions = useCallback(async () => {
+    const before = useSessionRuntimeStore.getState();
+    const liveSessions = Object.values(before.sessions).filter(
+      (session) => Boolean(session.identity.runtimeId),
+    );
+    await Promise.allSettled(liveSessions.map(async (session) => {
+      if (!session.identity.runtimeId) return;
+      if (session.stream.pendingTextDeltas.length) flushDeltas(session.scopeKey);
+      const current = useSessionRuntimeStore.getState().sessions[session.scopeKey];
+      const expectedTranscriptRevision = current?.transcriptRevision;
+      let snapshot: SessionSnapshot;
+      try {
+        snapshot = await transport.sessionActivate(session.identity.runtimeId);
+      } catch (error) {
+        if (!isMethodNotFound(error)) throw error;
+        snapshot = await transport.sessionResume(session.identity.storedId, {
+          profile: session.profile,
+        });
+      }
+      applySnapshot(snapshot, session.profile, snapshot.messages, {
+        select: false,
+        ...(expectedTranscriptRevision === undefined ? {} : { expectedTranscriptRevision }),
+      });
+    }));
+    const after = useSessionRuntimeStore.getState();
+    const selected = after.selectedScopeKey ? after.sessions[after.selectedScopeKey] : undefined;
+    if (selected?.identity.runtimeId) {
+      const nextIdentity: SessionIdentity = {
+        storedId: selected.identity.storedId,
+        runtimeId: selected.identity.runtimeId,
+        ...(selected.identity.lineageRootId
+          ? { lineageRootId: selected.identity.lineageRootId }
+          : {}),
+      };
+      identityRef.current = nextIdentity;
+      setIdentity(nextIdentity);
+      setSessionTitle(selected.title || tSessions("untitled"));
+    }
+  }, [applySnapshot, flushDeltas, tSessions, transport]);
 
   useEffect(() => {
-    const ownerProfile = initialProfile ?? activeProfile;
-    if (initialProfile && initialProfile !== activeProfile) setActiveProfile(initialProfile);
+    const ownerProfile = initialProfile ?? activeProfileRef.current;
+    if (initialProfile && initialProfile !== activeProfileRef.current) setActiveProfile(initialProfile);
     if (storedSessionId === activeStoredIdRef.current && identityRef.current?.storedId === storedSessionId) return;
     resumeGenerationRef.current += 1;
     activeStoredIdRef.current = storedSessionId;
@@ -599,9 +687,7 @@ export function ChatShell({
     loadedStoredIdRef.current = undefined;
     setActiveStoredId(storedSessionId);
     setIdentity(null);
-    setRunning(false);
-    setTranscriptItems([]);
-    domainPromptsRef.current.clear();
+    useSessionRuntimeStore.getState().selectSession(null);
     if (storedSessionId && profileRequiredError) {
       setNotice({kind: "error", message: tErrors("profileRequired")});
       return;
@@ -609,7 +695,7 @@ export function ChatShell({
     if (storedSessionId && connection === "connected") {
       void resumeStoredSession(storedSessionId, false, ownerProfile);
     }
-  }, [activeProfile, connection, initialProfile, profileRequiredError, resumeStoredSession, storedSessionId, tErrors]);
+  }, [connection, initialProfile, profileRequiredError, resumeStoredSession, storedSessionId, tErrors]);
 
   useEffect(() => {
     const unsubscribeState = transport.onConnectionState((state) => {
@@ -619,9 +705,7 @@ export function ChatShell({
       if (phase === "connected" && reconnectingRef.current) {
         reconnectingRef.current = false;
         void queryClient.invalidateQueries({ queryKey: ["hermes-commands"] });
-        if (identityRef.current) {
-          void resumeStoredSessionRef.current(identityRef.current.storedId, true);
-        }
+        void rebindLiveSessions();
       }
     });
     let cancelled = false;
@@ -688,21 +772,37 @@ export function ChatShell({
       speechPlaybackRef.current = null;
       transport.disconnect();
     };
-  }, [applySnapshot, locale, queryClient, router, tErrors, transport]);
+  }, [applySnapshot, locale, queryClient, rebindLiveSessions, router, tErrors, transport]);
 
   useEffect(() => {
     const unsubscribe = transport.onEvent((event) => {
-      recordActivityEvent(event, activeProfile);
       if (event.type === "gateway.ready") {
         const payload = record(event.payload);
         const contract = Number(payload.desktop_contract ?? payload.contract);
         if (Number.isFinite(contract)) setGatewayContract(contract);
       }
-      const active = identityRef.current;
-      if (
-        event.sessionId &&
-        (!active || (event.sessionId !== active.runtimeId && event.sessionId !== active.storedId))
-      ) return;
+      const runtimeStore = useSessionRuntimeStore.getState();
+      const runtimeSession = event.sessionId
+        ? runtimeStore.findByRuntime(event.sessionId)
+          ?? runtimeStore.findByStored(activeProfileRef.current, event.sessionId)
+        : undefined;
+      recordActivityEvent(event, runtimeSession?.profile ?? activeProfileRef.current);
+      if (event.sessionId && !runtimeSession) return;
+      if (!runtimeSession) return;
+
+      const scopeKey = runtimeSession.scopeKey;
+      const selected = runtimeStore.selectedScopeKey === scopeKey;
+      eventScopeRef.current = scopeKey;
+      pendingDeltasRef.current = runtimeSession.stream.pendingTextDeltas;
+      deltaFrameRef.current = runtimeSession.stream.deltaFrameId;
+      assistantRunIdRef.current = runtimeSession.stream.assistantRunId;
+      assistantMessageIdRef.current = runtimeSession.stream.assistantMessageId;
+      reasoningIdRef.current = runtimeSession.stream.reasoningId;
+      lastReasoningIdRef.current = runtimeSession.stream.lastReasoningId;
+      reasoningSeenRef.current = runtimeSession.stream.reasoningSeen;
+      assistantPartSequenceRef.current = runtimeSession.stream.assistantPartSequence;
+
+      try {
 
       if (event.type === "message.start") {
         assistantRunIdRef.current = optionalString(record(event.payload).message_id) ?? localId("assistant");
@@ -711,6 +811,12 @@ export function ChatShell({
         lastReasoningIdRef.current = null;
         reasoningSeenRef.current = false;
         assistantPartSequenceRef.current = 0;
+        runtimeStore.updateLiveState({ scopeKey }, {
+          status: "working",
+          running: true,
+          needsInput: false,
+          error: null,
+        });
         setRunning(true);
         return;
       }
@@ -801,6 +907,12 @@ export function ChatShell({
         reasoningIdRef.current = null;
         lastReasoningIdRef.current = null;
         setRunning(false);
+        runtimeStore.updateLiveState({ scopeKey }, {
+          status: "idle",
+          running: false,
+          needsInput: false,
+          markUnread: !selected,
+        });
         void queryClient.invalidateQueries({ queryKey: ["hermes-sessions"] });
         if (catalogRefreshAfterRunRef.current) {
           catalogRefreshAfterRunRef.current = false;
@@ -814,8 +926,12 @@ export function ChatShell({
         const eventContract = Number(payload.desktop_contract ?? payload.contract);
         if (Number.isFinite(eventContract)) setGatewayContract(eventContract);
         if (typeof payload.running === "boolean") setRunning(payload.running);
-        if (optionalString(payload.title)) setSessionTitle(String(payload.title));
-        const stored = identityRef.current?.storedId;
+        const eventTitle = optionalString(payload.title);
+        if (eventTitle) {
+          runtimeStore.updateLiveState({ scopeKey }, { title: eventTitle });
+          if (selected) setSessionTitle(eventTitle);
+        }
+        const stored = runtimeSession.identity.storedId;
         if (stored && (
           optionalString(payload.model)
           || optionalString(payload.provider)
@@ -823,7 +939,7 @@ export function ChatShell({
           || typeof payload.fast === "boolean"
           || typeof payload.yolo === "boolean"
         )) {
-          const eventProfile = optionalString(payload.profile_name) ?? activeProfile;
+          const eventProfile = runtimeSession.profile;
           setModelSettings(chatSessionScopeKey(eventProfile, stored), {
             ...(optionalString(payload.model) ? { model: String(payload.model) } : {}),
             ...(optionalString(payload.provider) ? { provider: String(payload.provider) } : {}),
@@ -838,15 +954,23 @@ export function ChatShell({
       }
       if (event.type === "session.title") {
         const title = optionalString(record(event.payload).title);
-        if (title) setSessionTitle(title);
+        if (title) {
+          runtimeStore.updateLiveState({ scopeKey }, { title });
+          if (selected) setSessionTitle(title);
+        }
         void queryClient.invalidateQueries({ queryKey: ["hermes-sessions"] });
         return;
       }
       if (event.type === "status.update") {
         const payload = record(event.payload);
         const status = String(payload.status ?? payload.kind ?? "");
-        if (["idle", "complete", "completed", "interrupted", "error"].includes(status)) setRunning(false);
-        else if (status) setRunning(true);
+        if (["idle", "complete", "completed", "interrupted", "error"].includes(status)) {
+          setRunning(false);
+        } else if (status === "waiting") {
+          runtimeStore.updateLiveState({ scopeKey }, { status: "waiting", running: true, needsInput: true });
+        } else if (status) {
+          setRunning(true);
+        }
       }
 
       const activity = toolActivityFromEvent(event);
@@ -909,8 +1033,11 @@ export function ChatShell({
         for (const value of artifactValues) {
           const artifact = artifactFromValue(value, activity.id);
           if (artifact) {
-            const stored = identityRef.current?.storedId;
-            if (stored) addArtifact(chatSessionScopeKey(activeProfile, stored), artifact);
+            addArtifact(
+              chatSessionScopeKey(runtimeSession.profile, runtimeSession.identity.storedId),
+              artifact,
+              { select: selected },
+            );
           }
         }
       }
@@ -918,7 +1045,7 @@ export function ChatShell({
       const domainPrompt = pendingPromptFromEvent(event);
       if (domainPrompt) {
         const key = promptKey(domainPrompt);
-        domainPromptsRef.current.set(key, domainPrompt);
+        runtimeStore.setDomainPrompt({ scopeKey }, key, domainPrompt, { markUnread: !selected });
         const prompt = toInteractivePrompt(domainPrompt, {
           approval: tPrompts("approvalTitle"),
           clarification: tPrompts("clarificationTitle"),
@@ -943,21 +1070,38 @@ export function ChatShell({
         const expiredId = requestId ?? fallbackId;
         if (expiredId) {
           setTranscriptItems((current) => reduceTranscript(current, { type: "expire-prompt", id: expiredId }));
-          domainPromptsRef.current.delete(expiredId);
+          runtimeStore.removeDomainPrompt({ scopeKey }, expiredId);
         }
       }
       if (event.type === "error") {
         const message = optionalString(record(event.payload).message) ?? tErrors("generic");
-        setNotice({ kind: "error", message });
+        runtimeStore.updateLiveState({ scopeKey }, {
+          status: "idle",
+          running: false,
+          error: message,
+          markUnread: !selected,
+        });
+        if (selected) setNotice({ kind: "error", message });
         setRunning(false);
         const id = assistantMessageIdRef.current;
         if (id) {
           setTranscriptItems((current) => reduceTranscript(current, { type: "message-status", id, status: "error" }));
         }
       }
+      } finally {
+        useSessionRuntimeStore.getState().setStreamMetadata({ scopeKey }, {
+          assistantRunId: assistantRunIdRef.current,
+          assistantMessageId: assistantMessageIdRef.current,
+          reasoningId: reasoningIdRef.current,
+          lastReasoningId: lastReasoningIdRef.current,
+          reasoningSeen: reasoningSeenRef.current,
+          assistantPartSequence: assistantPartSequenceRef.current,
+        });
+        eventScopeRef.current = null;
+      }
     });
     return unsubscribe;
-  }, [activeProfile, addArtifact, flushDeltas, queryClient, queueDelta, recordActivityEvent, setModelSettings, tErrors, tPrompts, transport]);
+  }, [addArtifact, flushDeltas, queryClient, queueDelta, recordActivityEvent, setModelSettings, setRunning, setTranscriptItems, tErrors, tPrompts, transport]);
 
   useEffect(() => {
     if (profileRequiredError) return;
@@ -977,6 +1121,68 @@ export function ChatShell({
     },
     enabled: connection === "connected" && capabilities?.gateway === true && capabilities.sessions,
   });
+
+  useEffect(() => {
+    if (connection !== "connected" || capabilities?.gateway !== true || !capabilities.sessions) return;
+    let cancelled = false;
+    let unsupported = false;
+    const confirmedStoredIds = new Set(
+      (sessionsQuery.data ?? [])
+        .filter((session) => session.profile === activeProfile)
+        .map((session) => session.id),
+    );
+    const poll = async () => {
+      if (cancelled || unsupported || activeListInFlightRef.current) return;
+      activeListInFlightRef.current = true;
+      try {
+        const activeItems = await transport.sessionActiveList(identityRef.current?.runtimeId);
+        if (cancelled) return;
+        const seenRuntimeIds = new Set(activeItems.map((item) => item.identity.runtimeId));
+        for (const item of activeItems) {
+          const state = useSessionRuntimeStore.getState();
+          const known = state.findByRuntime(item.identity.runtimeId)
+            ?? state.findByStored(activeProfile, item.identity.storedId);
+          if (!known && !confirmedStoredIds.has(item.identity.storedId)) continue;
+          const profile = known?.profile ?? activeProfile;
+          const scopeKey = state.registerSession({
+            profile,
+            storedId: item.identity.storedId,
+            runtimeId: item.identity.runtimeId,
+            ...(item.title ? { title: item.title } : {}),
+          });
+          useSessionRuntimeStore.getState().updateLiveState({ scopeKey }, {
+            status: item.status,
+            running: item.status !== "idle",
+            needsInput: item.status === "waiting",
+            ...(item.title ? { title: item.title } : {}),
+          });
+          if (
+            useSessionRuntimeStore.getState().selectedScopeKey === scopeKey
+            && identityRef.current?.runtimeId !== item.identity.runtimeId
+          ) {
+            const nextIdentity = item.identity;
+            identityRef.current = nextIdentity;
+            setIdentity(nextIdentity);
+          }
+        }
+        const after = useSessionRuntimeStore.getState();
+        for (const session of Object.values(after.sessions)) {
+          const runtimeId = session.identity.runtimeId;
+          if (runtimeId && !seenRuntimeIds.has(runtimeId)) after.dropRuntimeBinding(runtimeId);
+        }
+      } catch (error) {
+        if (isMethodNotFound(error)) unsupported = true;
+      } finally {
+        activeListInFlightRef.current = false;
+      }
+    };
+    void poll();
+    const interval = window.setInterval(() => void poll(), 1_500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [activeProfile, capabilities?.gateway, capabilities?.sessions, connection, sessionsQuery.data, transport]);
 
   const modelsQuery = useQuery({
     queryKey: ["hermes-models", identity?.runtimeId ?? "none"],
@@ -1026,13 +1232,44 @@ export function ChatShell({
     staleTime: 60_000,
   });
 
-  const sessions = useMemo(
-    () =>
-      (sessionsQuery.data ?? [])
-        .filter((session) => session.profile === activeProfile)
-        .map((session) => toSessionSummary(session, tSessions("untitled"))),
-    [activeProfile, sessionsQuery.data, tSessions],
-  );
+  const sessions = useMemo(() => {
+    const merged = new Map<string, SessionSummary>();
+    for (const session of (sessionsQuery.data ?? []).filter((item) => item.profile === activeProfile)) {
+      merged.set(session.id, toSessionSummary(session, tSessions("untitled")));
+    }
+    for (const runtime of Object.values(runtimeSessions)) {
+      if (runtime.profile !== activeProfile) continue;
+      const runtimeId = runtime.identity.runtimeId;
+      const durable = merged.get(runtime.identity.storedId);
+      if (!durable && !runtimeId) continue;
+      const transcriptMessages = runtime.transcriptItems.filter((item) => item.kind === "message");
+      const preview = [...transcriptMessages].reverse().find(
+        (item) => item.kind === "message" && item.message.rawSource.trim(),
+      );
+      merged.set(runtime.identity.storedId, {
+        ...(durable ?? {
+          storedId: runtime.identity.storedId,
+          title: runtime.title || tSessions("untitled"),
+          profile: runtime.profile,
+        }),
+        runtimeId,
+        title: runtime.title || durable?.title || tSessions("untitled"),
+        ...(preview?.kind === "message" ? { preview: preview.message.rawSource } : {}),
+        messageCount: Math.max(durable?.messageCount ?? 0, transcriptMessages.length),
+        updatedAt: new Date(runtime.updatedAt).toISOString(),
+        live: Boolean(runtimeId),
+        ...(runtimeId ? { runtimeStatus: runtime.liveStatus } : {}),
+        needsInput: runtime.needsInput,
+        unread: runtime.unread,
+        ...(runtime.error ? { error: runtime.error } : {}),
+        status: runtimeId ? "active" : "idle",
+      });
+    }
+    return [...merged.values()].sort((left, right) => (
+      new Date(right.updatedAt ?? right.createdAt ?? 0).getTime()
+      - new Date(left.updatedAt ?? left.createdAt ?? 0).getTime()
+    ));
+  }, [activeProfile, runtimeSessions, sessionsQuery.data, tSessions]);
   const models = useMemo(() => modelsQuery.data ?? [], [modelsQuery.data]);
   const commandCatalog = useMemo<NormalizedCommandCatalog>(
     () => normalizeCommandCatalog(commandsQuery.data, locale),
@@ -1175,12 +1412,7 @@ export function ChatShell({
       setNotice({kind: "error", message: tErrors("profileRequired")});
       return undefined;
     }
-    resumeGenerationRef.current += 1;
-    identityRef.current = null;
-    setIdentity(null);
-    setRunning(false);
-    setTranscriptItems([]);
-    domainPromptsRef.current.clear();
+    const generation = ++resumeGenerationRef.current;
     setLoadingSession(true);
     try {
       const snapshot = await transport.sessionCreate({
@@ -1192,10 +1424,13 @@ export function ChatShell({
         ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
         ...(input.fast === undefined ? {} : { fast: input.fast }),
       });
-      setActiveProfile(ownerProfile);
-      applySnapshot(snapshot, ownerProfile);
-      loadedStoredIdRef.current = snapshot.identity.storedId;
-      navigateToSession(snapshot.identity.storedId, "push", ownerProfile);
+      if (generation === resumeGenerationRef.current) {
+        applySnapshot(snapshot, ownerProfile);
+        loadedStoredIdRef.current = snapshot.identity.storedId;
+        navigateToSession(snapshot.identity.storedId, "push", ownerProfile);
+      } else {
+        applySnapshot(snapshot, ownerProfile, snapshot.messages, { select: false });
+      }
       await queryClient.invalidateQueries({ queryKey: ["hermes-sessions"] });
       await queryClient.invalidateQueries({ queryKey: ["hermes-projects"] });
       setMobileRail(null);
@@ -1205,38 +1440,31 @@ export function ChatShell({
       setNotice({ kind: "error", message: error instanceof Error ? error.message : tErrors("generic") });
       return undefined;
     } finally {
-      setLoadingSession(false);
+      if (generation === resumeGenerationRef.current) setLoadingSession(false);
     }
   }
 
   async function selectSession(session: SessionSummary) {
     if (session.storedId === identity?.storedId) {
+      resumeGenerationRef.current += 1;
+      setLoadingSession(false);
+      useSessionRuntimeStore.getState().markRead({
+        profile: session.profile ?? activeProfile,
+        storedId: session.storedId,
+      });
       setMobileRail(null);
       return;
     }
-    resumeGenerationRef.current += 1;
-    identityRef.current = null;
-    setIdentity(null);
-    setRunning(false);
-    setTranscriptItems([]);
-    domainPromptsRef.current.clear();
-    loadedStoredIdRef.current = undefined;
-    navigateToSession(session.storedId);
+    const ownerProfile = session.profile ?? activeProfile;
+    const selected = await resumeStoredSession(session.storedId, false, ownerProfile, true);
+    if (selected) navigateToSession(session.storedId, "push", ownerProfile);
     setMobileRail(null);
   }
 
-  function selectSearchResult(sessionId: string, ownerProfile: string) {
+  async function selectSearchResult(sessionId: string, ownerProfile: string) {
     if (!sessionId || !ownerProfile || ownerProfile === "all") return;
-    resumeGenerationRef.current += 1;
-    identityRef.current = null;
-    loadedStoredIdRef.current = undefined;
-    activeStoredIdRef.current = sessionId;
-    setActiveProfile(ownerProfile);
-    setIdentity(null);
-    setRunning(false);
-    setTranscriptItems([]);
-    domainPromptsRef.current.clear();
-    navigateToSession(sessionId, "push", ownerProfile);
+    const selected = await resumeStoredSession(sessionId, false, ownerProfile, true);
+    if (selected) navigateToSession(sessionId, "push", ownerProfile);
     setMobileRail(null);
   }
 
@@ -1302,13 +1530,16 @@ export function ChatShell({
       return;
     }
     clearSessionEphemera(chatSessionScopeKey(activeProfile, session.storedId));
+    useSessionRuntimeStore.getState().dropSession({
+      profile: session.profile ?? activeProfile,
+      storedId: session.storedId,
+    });
     if (deletingCurrent) {
       resumeGenerationRef.current += 1;
       identityRef.current = null;
       activeStoredIdRef.current = undefined;
       setIdentity(null);
       setActiveStoredId(undefined);
-      setTranscriptItems([]);
       router.push(`/${locale}?profile=${encodeURIComponent(activeProfile)}`);
     }
     await queryClient.invalidateQueries({ queryKey: ["hermes-sessions"] });
@@ -1330,10 +1561,10 @@ export function ChatShell({
     loadedStoredIdRef.current = undefined;
     setIdentity(null);
     setActiveStoredId(undefined);
-    setTranscriptItems([]);
+    useSessionRuntimeStore.getState().dropRuntimeBinding(active.runtimeId);
+    useSessionRuntimeStore.getState().selectSession(null);
     setUsageDialog(null);
     setRunning(false);
-    domainPromptsRef.current.clear();
     router.push(`/${locale}?profile=${encodeURIComponent(activeProfile)}`);
     await queryClient.invalidateQueries({ queryKey: ["hermes-sessions"] });
   }
@@ -1394,14 +1625,20 @@ export function ChatShell({
   async function undoLastTurn() {
     const active = identityRef.current;
     if (!active || running || recoveryBusy) return;
+    const scopeKey = chatSessionScopeKey(activeProfileRef.current, active.storedId);
     setRecoveryBusy(true);
     setRecoveryError(undefined);
     try {
       const result = await transport.sessionUndo(active);
       const history = await transport.sessionHistory(active);
-      setTranscriptItems(messagesToTranscript(history));
-      setDraft(chatSessionScopeKey(activeProfile, active.storedId), result.message);
-      setNotice({ kind: "info", message: result.notice || tSessions("undoSuccess") });
+      useSessionRuntimeStore.getState().updateTranscript(
+        { scopeKey },
+        () => messagesToTranscript(history),
+      );
+      setDraft(scopeKey, result.message);
+      if (useSessionRuntimeStore.getState().selectedScopeKey === scopeKey) {
+        setNotice({ kind: "info", message: result.notice || tSessions("undoSuccess") });
+      }
       await queryClient.invalidateQueries({ queryKey: ["hermes-sessions"] });
     } catch (error) {
       setRecoveryError(error instanceof Error ? error.message : tErrors("generic"));
@@ -1413,6 +1650,8 @@ export function ChatShell({
   async function restoreCheckpoint(checkpoint: RollbackCheckpoint) {
     const active = identityRef.current;
     if (!active || running || recoveryBusy || (gatewayContract ?? 0) < 4) return;
+    const ownerProfile = activeProfileRef.current;
+    const scopeKey = chatSessionScopeKey(ownerProfile, active.storedId);
     setRecoveryBusy(true);
     setRecoveryError(undefined);
     try {
@@ -1438,8 +1677,11 @@ export function ChatShell({
         throw new Error(result.message || tSessions("rollbackSyncFailed"));
       }
       const history = await transport.sessionHistory(active);
-      setTranscriptItems(messagesToTranscript(history));
-      useChatUiStore.getState().clearArtifacts(chatSessionScopeKey(activeProfile, active.storedId));
+      useSessionRuntimeStore.getState().updateTranscript(
+        { scopeKey },
+        () => messagesToTranscript(history),
+      );
+      useChatUiStore.getState().clearArtifacts(scopeKey);
       setWorkspaceRefreshKey((current) => current + 1);
       const verification = await transport.request("verification.status", {
         session_id: active.runtimeId,
@@ -1454,7 +1696,7 @@ export function ChatShell({
           receivedAt: Date.now(),
           sessionId: active.runtimeId,
           type: "verification.status",
-        }, activeProfile);
+        }, ownerProfile);
       }
       setRecoveryOpen(false);
       setNotice({ kind: "info", message: tSessions("rollbackSuccess") });
@@ -1510,9 +1752,7 @@ export function ChatShell({
     activeStoredIdRef.current = undefined;
     setActiveProfile(profile);
     setIdentity(null);
-    setRunning(false);
-    setTranscriptItems([]);
-    domainPromptsRef.current.clear();
+    useSessionRuntimeStore.getState().selectSession(null);
     setActiveStoredId(undefined);
     router.push(`/${locale}?profile=${encodeURIComponent(profile)}`);
     await Promise.all([
@@ -1523,6 +1763,7 @@ export function ChatShell({
 
   async function sendCommandPrompt(active: SessionIdentity, text: string) {
     const startedWhileRunning = running;
+    const scopeKey = chatSessionScopeKey(activeProfileRef.current, active.storedId);
     const id = localId("command-send");
     setTranscriptItems((current) => {
       const ordinal = current.reduce(
@@ -1548,8 +1789,11 @@ export function ChatShell({
     try {
       await transport.send(active, text);
     } catch (error) {
-      if (!startedWhileRunning) setRunning(false);
-      setTranscriptItems((current) => reduceTranscript(current, {
+      const runtimeStore = useSessionRuntimeStore.getState();
+      if (!startedWhileRunning) {
+        runtimeStore.updateLiveState({ scopeKey }, { status: "idle", running: false });
+      }
+      runtimeStore.updateTranscript({ scopeKey }, (current) => reduceTranscript(current, {
         type: "message-status",
         id,
         status: "error",
@@ -1859,19 +2103,28 @@ export function ChatShell({
       setDraft(activeKey, "");
       clearSubmittedAttachments(activeKey, readyAttachments.map((attachment) => attachment.id));
     } catch (error) {
-      setRunning(false);
-      setTranscriptItems((current) => reduceTranscript(current, {
+      const runtimeStore = useSessionRuntimeStore.getState();
+      runtimeStore.updateLiveState({ scopeKey: activeKey }, {
+        status: "idle",
+        running: false,
+        error: error instanceof Error ? error.message : tErrors("generic"),
+        markUnread: true,
+      });
+      runtimeStore.updateTranscript({ scopeKey: activeKey }, (current) => reduceTranscript(current, {
         type: "message-status",
         id: userMessage.id,
         status: "error",
       }));
-      setNotice({ kind: "error", message: error instanceof Error ? error.message : tErrors("generic") });
+      if (runtimeStore.selectedScopeKey === activeKey) {
+        setNotice({ kind: "error", message: error instanceof Error ? error.message : tErrors("generic") });
+      }
     }
   }
 
   async function rewindAndSubmit(target: ChatMessage, text: string) {
     const active = identityRef.current;
     if (!active || target.userOrdinal === undefined || running || (gatewayContract ?? 0) < 4) return;
+    const scopeKey = chatSessionScopeKey(activeProfileRef.current, active.storedId);
     if (!window.confirm(tChat("rewindConfirm"))) return;
     const previous = transcriptItems;
     const index = previous.findIndex((item) => item.kind === "message" && item.message.id === target.id);
@@ -1902,15 +2155,23 @@ export function ChatShell({
     } catch (error) {
       try {
         const authoritative = await transport.sessionHistory(active);
-        setTranscriptItems(messagesToTranscript(authoritative));
+        useSessionRuntimeStore.getState().updateTranscript(
+          { scopeKey },
+          () => messagesToTranscript(authoritative),
+        );
       } catch {
-        setTranscriptItems(previous);
+        useSessionRuntimeStore.getState().updateTranscript({ scopeKey }, () => previous);
       }
-      setRunning(false);
-      setNotice({
-        kind: "error",
-        message: error instanceof Error ? error.message : tChat("rewindFailed"),
-      });
+      useSessionRuntimeStore.getState().updateLiveState(
+        { scopeKey },
+        { status: "idle", running: false },
+      );
+      if (useSessionRuntimeStore.getState().selectedScopeKey === scopeKey) {
+        setNotice({
+          kind: "error",
+          message: error instanceof Error ? error.message : tChat("rewindFailed"),
+        });
+      }
     }
   }
 
@@ -1929,27 +2190,109 @@ export function ChatShell({
     setNotice({ kind: "warning", message: tChat("rewindFailed") });
   }
 
-  useEffect(() => {
-    if (running || processingQueueRef.current || !identity) return;
-    const next = shiftQueuedPrompt(chatSessionScopeKey(activeProfile, identity.storedId));
+  const drainRuntimeQueue = useCallback(async (scopeKey: string) => {
+    if (drainingSessionScopesRef.current.has(scopeKey)) return;
+    const runtimeStore = useSessionRuntimeStore.getState();
+    const session = runtimeStore.sessions[scopeKey];
+    if (
+      !session?.identity.runtimeId
+      || session.running
+      || session.needsInput
+      || session.liveStatus !== "idle"
+    ) return;
+    const next = useChatUiStore.getState().shiftQueuedPrompt(scopeKey);
     if (!next) return;
-    processingQueueRef.current = true;
-    void dispatchMessage(next, "send", false).finally(() => {
-      processingQueueRef.current = false;
+    drainingSessionScopesRef.current.add(scopeKey);
+    runtimeStore.setStreamMetadata({ scopeKey }, { processingQueue: true });
+    const id = localId("user-queued");
+    const userOrdinal = session.transcriptItems.reduce(
+      (max, item) => item.kind === "message" && item.message.userOrdinal !== undefined
+        ? Math.max(max, item.message.userOrdinal)
+        : max,
+      -1,
+    ) + 1;
+    runtimeStore.updateTranscript({ scopeKey }, (current) => reduceTranscript(current, {
+      type: "append-message",
+      message: {
+        id,
+        role: "user",
+        content: next,
+        rawSource: next,
+        createdAt: new Date().toISOString(),
+        status: "complete",
+        userOrdinal,
+      },
+    }));
+    runtimeStore.updateLiveState({ scopeKey }, {
+      status: "starting",
+      running: true,
+      error: null,
     });
-    // dispatchMessage reads current connection/session refs; queue length triggers this effect.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeProfile, identity, queue.length, running, shiftQueuedPrompt]);
+    try {
+      await transport.send({
+        storedId: session.identity.storedId,
+        runtimeId: session.identity.runtimeId,
+        ...(session.identity.lineageRootId
+          ? { lineageRootId: session.identity.lineageRootId }
+          : {}),
+      }, next);
+      const uiState = useChatUiStore.getState();
+      const submitted = uiState.attachments[scopeKey]?.filter((item) => item.status === "ready") ?? [];
+      for (const attachment of submitted) {
+        if (attachment.previewUrl) URL.revokeObjectURL(attachment.previewUrl);
+      }
+      if (submitted.length) {
+        const submittedIds = new Set(submitted.map((item) => item.id));
+        uiState.setAttachments(
+          scopeKey,
+          (uiState.attachments[scopeKey] ?? []).filter((item) => !submittedIds.has(item.id)),
+        );
+      }
+    } catch (error) {
+      runtimeStore.updateTranscript({ scopeKey }, (current) => reduceTranscript(current, {
+        type: "message-status",
+        id,
+        status: "error",
+      }), { markUnread: true });
+      runtimeStore.updateLiveState({ scopeKey }, {
+        status: "idle",
+        running: false,
+        error: error instanceof Error ? error.message : tErrors("generic"),
+        markUnread: true,
+      });
+    } finally {
+      drainingSessionScopesRef.current.delete(scopeKey);
+      useSessionRuntimeStore.getState().setStreamMetadata({ scopeKey }, { processingQueue: false });
+    }
+  }, [tErrors, transport]);
+
+  useEffect(() => {
+    if (connection !== "connected") return;
+    const runtimeStore = useSessionRuntimeStore.getState();
+    for (const session of Object.values(runtimeStore.sessions)) {
+      if ((queuedPrompts[session.scopeKey]?.length ?? 0) > 0) {
+        void drainRuntimeQueue(session.scopeKey);
+      }
+    }
+  }, [connection, drainRuntimeQueue, queuedPrompts, runtimeSessions]);
 
   async function stopRun() {
     if (!identity) return;
+    const target = useSessionRuntimeStore.getState().findByRuntime(identity.runtimeId);
+    if (!target) return;
     try {
       await transport.stop(identity);
-      setRunning(false);
-      const id = assistantMessageIdRef.current
-        ?? `${assistantRunIdRef.current ?? localId("assistant")}:text:${assistantPartSequenceRef.current++}`;
+      const runtimeStore = useSessionRuntimeStore.getState();
+      const latest = runtimeStore.sessions[target.scopeKey] ?? target;
+      runtimeStore.updateLiveState({ scopeKey: target.scopeKey }, {
+        status: "idle",
+        running: false,
+        needsInput: false,
+      });
+      const id = latest.stream.assistantMessageId
+        ?? `${latest.stream.assistantRunId ?? localId("assistant")}:text:${latest.stream.assistantPartSequence}`;
       if (id) {
-        setTranscriptItems((current) => {
+        runtimeStore.updateTranscript({ scopeKey: target.scopeKey }, (current) => {
           const exists = current.some((item) => item.kind === "message" && item.message.id === id);
           return exists
             ? reduceTranscript(current, { type: "message-status", id, status: "interrupted" })
@@ -1965,20 +2308,29 @@ export function ChatShell({
                 },
               });
         });
-        assistantMessageIdRef.current = null;
       }
-      if (lastReasoningIdRef.current) {
-        setTranscriptItems((current) => reduceTranscript(current, {
+      if (latest.stream.lastReasoningId) {
+        runtimeStore.updateTranscript({ scopeKey: target.scopeKey }, (current) => reduceTranscript(current, {
           type: "reasoning-status",
-          id: lastReasoningIdRef.current!,
+          id: latest.stream.lastReasoningId!,
           status: "interrupted",
         }));
       }
-      assistantRunIdRef.current = null;
-      reasoningIdRef.current = null;
-      lastReasoningIdRef.current = null;
+      runtimeStore.setStreamMetadata({ scopeKey: target.scopeKey }, {
+        assistantRunId: null,
+        assistantMessageId: null,
+        reasoningId: null,
+        lastReasoningId: null,
+      });
     } catch (error) {
-      setNotice({ kind: "error", message: error instanceof Error ? error.message : tErrors("generic") });
+      const message = error instanceof Error ? error.message : tErrors("generic");
+      useSessionRuntimeStore.getState().updateLiveState({ scopeKey: target.scopeKey }, {
+        error: message,
+        markUnread: true,
+      });
+      if (useSessionRuntimeStore.getState().selectedScopeKey === target.scopeKey) {
+        setNotice({ kind: "error", message });
+      }
     }
   }
 
@@ -2098,7 +2450,11 @@ export function ChatShell({
   }
 
   async function respondToPrompt(prompt: InteractivePrompt, response: PromptResponse) {
-    const domain = domainPromptsRef.current.get(prompt.id);
+    const runtimeState = useSessionRuntimeStore.getState();
+    const selectedScopeKey = runtimeState.selectedScopeKey;
+    const domain = selectedScopeKey
+      ? runtimeState.sessions[selectedScopeKey]?.domainPrompts[prompt.id]
+      : undefined;
     if (!domain) return;
     let accepted = false;
     if (domain.kind === "approval" && (response.action === "approve-once" || response.action === "approve-always" || response.action === "deny")) {
@@ -2114,17 +2470,25 @@ export function ChatShell({
       accepted = await transport.respondToSecret(domain, response.value);
     }
     if (accepted) {
-      domainPromptsRef.current.delete(prompt.id);
-      setTranscriptItems((current) => reduceTranscript(current, { type: "remove-prompt", id: prompt.id }));
+      if (selectedScopeKey) {
+        const runtimeStore = useSessionRuntimeStore.getState();
+        runtimeStore.removeDomainPrompt({ scopeKey: selectedScopeKey }, prompt.id);
+        runtimeStore.updateTranscript(
+          { scopeKey: selectedScopeKey },
+          (current) => reduceTranscript(current, { type: "remove-prompt", id: prompt.id }),
+        );
+      }
     }
   }
 
   async function changeModel(model: ModelOption) {
     if (!identity) return;
+    const targetIdentity = identity;
+    const scopeKey = chatSessionScopeKey(activeProfileRef.current, identity.storedId);
     if (messages.length > 8) setNotice({ kind: "warning", message: tModels("cacheWarning") });
     try {
-      await transport.setModel(identity, model.id, model.provider);
-      setModelSettings(chatSessionScopeKey(activeProfile, identity.storedId), { model: model.id, provider: model.provider });
+      await transport.setModel(targetIdentity, model.id, model.provider);
+      setModelSettings(scopeKey, { model: model.id, provider: model.provider });
       await queryClient.invalidateQueries({ queryKey: ["hermes-models"] });
     } catch (error) {
       refreshCapabilities();
@@ -2134,13 +2498,15 @@ export function ChatShell({
 
   async function setSessionReasoning(value: string) {
     if (!identity) return;
+    const targetIdentity = identity;
+    const scopeKey = chatSessionScopeKey(activeProfileRef.current, identity.storedId);
     try {
       await transport.request("config.set", {
-        session_id: identity.runtimeId,
+        session_id: targetIdentity.runtimeId,
         key: "reasoning",
         value,
       });
-      setModelSettings(chatSessionScopeKey(activeProfile, identity.storedId), { reasoning: value });
+      setModelSettings(scopeKey, { reasoning: value });
     } catch (error) {
       refreshCapabilities();
       setNotice({ kind: "error", message: error instanceof Error ? error.message : tErrors("generic") });
@@ -2149,13 +2515,20 @@ export function ChatShell({
 
   async function branchSession(name?: string): Promise<SessionSnapshot | undefined> {
     if (!identity) return undefined;
+    const targetIdentity = identity;
+    const ownerProfile = activeProfileRef.current;
+    const generation = ++resumeGenerationRef.current;
     setSessionActionBusy(true);
     try {
-      const snapshot = await transport.sessionBranch(identity, name);
-      applySnapshot(snapshot, activeProfile);
-      loadedStoredIdRef.current = snapshot.identity.storedId;
-      navigateToSession(snapshot.identity.storedId, "push", activeProfile);
-      setSessionAction(null);
+      const snapshot = await transport.sessionBranch(targetIdentity, name);
+      if (generation === resumeGenerationRef.current) {
+        applySnapshot(snapshot, ownerProfile);
+        loadedStoredIdRef.current = snapshot.identity.storedId;
+        navigateToSession(snapshot.identity.storedId, "push", ownerProfile);
+        setSessionAction(null);
+      } else {
+        applySnapshot(snapshot, ownerProfile, snapshot.messages, { select: false });
+      }
       await queryClient.invalidateQueries({ queryKey: ["hermes-sessions"] });
       return snapshot;
     } catch (error) {
@@ -2169,11 +2542,16 @@ export function ChatShell({
 
   async function compressSession(focusTopic?: string) {
     if (!identity) return;
+    const targetIdentity = identity;
+    const scopeKey = chatSessionScopeKey(activeProfileRef.current, identity.storedId);
     setSessionActionBusy(true);
     try {
-      const compressed = await transport.sessionCompress(identity, focusTopic);
-      setTranscriptItems(messagesToTranscript(compressed));
-      setSessionAction(null);
+      const compressed = await transport.sessionCompress(targetIdentity, focusTopic);
+      useSessionRuntimeStore.getState().updateTranscript(
+        { scopeKey },
+        () => messagesToTranscript(compressed),
+      );
+      if (useSessionRuntimeStore.getState().selectedScopeKey === scopeKey) setSessionAction(null);
       await queryClient.invalidateQueries({ queryKey: ["hermes-sessions"] });
     } catch (error) {
       refreshCapabilities();
@@ -2351,6 +2729,12 @@ export function ChatShell({
           confirmClose: tSessions("confirmClose"),
           closeDescription: tSessions("closeDescription"),
           renameTitle: tSessions("renameTitle"),
+          statusNeedsInput: tSessions("statusNeedsInput"),
+          statusError: tSessions("statusError"),
+          statusStarting: tSessions("statusStarting"),
+          statusWorking: tSessions("statusWorking"),
+          statusUnread: tSessions("statusUnread"),
+          statusIdle: tSessions("statusIdle"),
         }}
         projectBrowser={(
           <ProjectSessionBrowser

@@ -2,7 +2,16 @@
 
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ArrowDown, Check, Copy, LoaderCircle, Pencil, RefreshCw, Sparkles, Square, Volume2, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+  type UIEvent as ReactUIEvent,
+} from "react";
 
 import { MarkdownRenderer } from "./markdown-renderer";
 import { PromptCard, type PromptResponse } from "./prompt-card";
@@ -87,6 +96,8 @@ export function Transcript({
 }: TranscriptProps) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const followLatestRef = useRef(true);
+  const bottomAnchorLockedRef = useRef(false);
+  const userScrollIntentRef = useRef(false);
   const userScrollGenerationRef = useRef(0);
   const [showJump, setShowJump] = useState(false);
   const lastSignature = useMemo(() => {
@@ -118,6 +129,8 @@ export function Transcript({
     overscan: 7,
     getItemKey: (index) => items[index]?.key ?? index,
   });
+  virtualizer.shouldAdjustScrollPositionOnItemSizeChange = () => !bottomAnchorLockedRef.current;
+  const totalSize = virtualizer.getTotalSize();
 
   const scrollToLatest = useCallback(
     (behavior: ScrollBehavior = "smooth") => {
@@ -128,6 +141,7 @@ export function Transcript({
       // the overlay; virtualizer alignment only knows about the item itself.
       viewport.scrollTo({ top: viewport.scrollHeight, behavior });
       followLatestRef.current = true;
+      userScrollIntentRef.current = false;
       setShowJump(false);
     },
     [items.length],
@@ -139,13 +153,23 @@ export function Transcript({
     return () => cancelAnimationFrame(frame);
   }, [lastSignature, scrollToLatest]);
 
-  const handleExpandedChange = useCallback((source: Element) => {
+  useLayoutEffect(() => {
+    if (!bottomAnchorLockedRef.current) return;
+    // A measured disclosure can update the virtual total in a React commit
+    // that lands later than its original click/resize frames. Anchor against
+    // that committed size instead of assuming a fixed number of frames is
+    // enough for the virtualizer to settle.
+    scrollToLatest("auto");
+  }, [scrollToLatest, totalSize]);
+
+  const handleExpandedChange = useCallback((source: Element, expanded: boolean) => {
     const virtualItem = source.closest(".transcript-virtual-item") as HTMLElement | null;
     const viewport = viewportRef.current;
     const wasFollowingLatest = followLatestRef.current || Boolean(
       viewport && viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 96,
     );
     const userScrollGeneration = userScrollGenerationRef.current;
+    if (wasFollowingLatest && expanded) bottomAnchorLockedRef.current = true;
     requestAnimationFrame(() => {
       if (virtualItem) virtualizer.measureElement(virtualItem);
       if (wasFollowingLatest && userScrollGeneration === userScrollGenerationRef.current) {
@@ -164,8 +188,20 @@ export function Transcript({
   }, [scrollToLatest, virtualizer]);
 
   const markUserScrollIntent = useCallback(() => {
+    // The lock belongs to the preceding disclosure resize. A fresh physical
+    // gesture is the authoritative signal that the user may leave the bottom.
+    bottomAnchorLockedRef.current = false;
+    userScrollIntentRef.current = true;
     userScrollGenerationRef.current += 1;
   }, []);
+
+  const handlePointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    const target = event.target instanceof Element ? event.target : null;
+    if (target?.closest("button, a, input, textarea, select, summary, [role='button'], [contenteditable='true']")) {
+      return;
+    }
+    markUserScrollIntent();
+  }, [markUserScrollIntent]);
 
   useEffect(() => {
     const viewport = viewportRef.current;
@@ -200,12 +236,24 @@ export function Transcript({
     };
   }, []);
 
-  function handleScroll() {
+  function handleScroll(event: ReactUIEvent<HTMLDivElement>) {
     const viewport = viewportRef.current;
     if (!viewport) return;
+    if (bottomAnchorLockedRef.current) {
+      viewport.scrollTop = viewport.scrollHeight;
+      followLatestRef.current = true;
+      userScrollIntentRef.current = false;
+      setShowJump(false);
+      return;
+    }
     const distance = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
     const following = distance < 96;
-    followLatestRef.current = following;
+    if (following) {
+      followLatestRef.current = true;
+      userScrollIntentRef.current = false;
+    } else if (userScrollIntentRef.current || !event.nativeEvent.isTrusted) {
+      followLatestRef.current = false;
+    }
     setShowJump(!following);
   }
 
@@ -221,7 +269,7 @@ export function Transcript({
         onScroll={handleScroll}
         onWheel={markUserScrollIntent}
         onTouchStart={markUserScrollIntent}
-        onPointerDown={markUserScrollIntent}
+        onPointerDown={handlePointerDown}
       >
         {!items.length ? (
           <div className="transcript-empty">
@@ -239,7 +287,7 @@ export function Transcript({
         ) : (
           <div
             className="transcript-virtual-space"
-            style={{ blockSize: `${virtualizer.getTotalSize()}px` }}
+            style={{ blockSize: `${totalSize}px` }}
           >
             {virtualizer.getVirtualItems().map((virtualItem) => {
               const item = items[virtualItem.index];
@@ -273,7 +321,7 @@ export function Transcript({
                   ) : item.kind === "tool" ? (
                     <ToolCard
                       tool={item.tool}
-                      onExpandedChange={(_open, trigger) => handleExpandedChange(trigger)}
+                      onExpandedChange={(open, trigger) => handleExpandedChange(trigger, open)}
                       labels={{
                         running: labels.toolRunning,
                         complete: labels.toolComplete,
@@ -331,7 +379,7 @@ function ReasoningDisclosure({
   reasoning: Extract<TranscriptItem, { kind: "reasoning" }>["reasoning"];
   locale: string;
   label: string;
-  onExpandedChange: (source: Element) => void;
+  onExpandedChange: (source: Element, expanded: boolean) => void;
 }) {
   const timestamp = formatTimestamp(reasoning.createdAt, locale);
   return (
@@ -339,7 +387,7 @@ function ReasoningDisclosure({
       className={`reasoning-card reasoning-card--${reasoning.status ?? "complete"}`}
       data-testid="reasoning"
       data-status={reasoning.status ?? "complete"}
-      onToggle={(event) => onExpandedChange(event.currentTarget)}
+      onToggle={(event) => onExpandedChange(event.currentTarget, event.currentTarget.open)}
     >
       <summary>
         <span>{label}</span>

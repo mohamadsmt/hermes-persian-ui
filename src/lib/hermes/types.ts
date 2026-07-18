@@ -43,6 +43,24 @@ export interface SessionIdentity {
   lineageRootId?: string
 }
 
+export type LiveSessionStatus = "idle" | "starting" | "waiting" | "working"
+
+/** A process-local Hermes session that can be activated without resuming it. */
+export interface ActiveSessionItem {
+  identity: SessionIdentity
+  current: boolean
+  status: LiveSessionStatus
+  title?: string
+  preview?: string
+  model?: string
+  messageCount: number
+  startedAt?: number
+  lastActive?: number
+}
+
+/** Descriptive alias used by callers that render active-session summaries. */
+export type ActiveSessionSummary = ActiveSessionItem
+
 export type MessageRole = "assistant" | "system" | "tool" | "user"
 
 export interface Message {
@@ -90,6 +108,7 @@ export interface SessionSnapshot {
   identity: SessionIdentity
   messages: Message[]
   messageCount: number
+  startedAt?: number
   info?: SessionRuntimeInfo
   inflight?: {
     user: string
@@ -97,7 +116,7 @@ export interface SessionSnapshot {
     streaming: boolean
   } | null
   running?: boolean
-  status?: string
+  status?: LiveSessionStatus
 }
 
 export interface SessionSummary {
@@ -514,6 +533,8 @@ export interface HermesTransport {
   onConnectionState(listener: (state: ConnectionState) => void): () => void
 
   sessionCreate(input: SessionCreateInput): Promise<SessionSnapshot>
+  sessionActiveList(currentRuntimeId?: string): Promise<ActiveSessionItem[]>
+  sessionActivate(runtimeId: string): Promise<SessionSnapshot>
   sessionList(options: SessionListOptions): Promise<SessionSummary[]>
   sessionResume(storedId: string, options: SessionResumeOptions): Promise<SessionSnapshot>
   sessionMessages(storedId: string, profile: string): Promise<SessionMessageHistory>

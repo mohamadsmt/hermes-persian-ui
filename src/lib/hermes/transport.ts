@@ -2,6 +2,7 @@ import {
   bootstrapInfoSchema,
   commandCatalogSchema,
   commandDispatchDirectiveSchema,
+  rawActiveSessionListSchema,
   rawModelOptionsSchema,
   rawProfileSessionListSchema,
   rawSessionHistorySchema,
@@ -17,6 +18,7 @@ import { isMethodNotFound, JsonRpcGatewayClient, type RpcClientOptions } from ".
 import {
   contentToText,
   makeHermesEvent,
+  normalizeActiveSessionItem,
   normalizeMessage,
   normalizeModels,
   normalizeSessionSnapshot,
@@ -32,6 +34,7 @@ import {
 import type {
   Attachment,
   AttachmentInput,
+  ActiveSessionItem,
   BootstrapInfo,
   CapabilitySet,
   CommandCatalog,
@@ -261,6 +264,27 @@ export class BrowserHermesTransport implements HermesTransport {
       ...(input.messages ? { messages: input.messages } : {}),
     })
     const snapshot = normalizeSessionSnapshot(rawSessionSnapshotSchema.parse(raw))
+    assertGatewayContract(snapshot)
+    return snapshot
+  }
+
+  async sessionActiveList(currentRuntimeId?: string): Promise<ActiveSessionItem[]> {
+    if (this.httpSelection) throw unsupportedHttpFallback("session.active_list")
+    const raw = rawActiveSessionListSchema.parse(
+      await this.request("session.active_list", {
+        ...(currentRuntimeId ? { current_session_id: currentRuntimeId } : {}),
+      }),
+    )
+    return raw.sessions.map(normalizeActiveSessionItem)
+  }
+
+  async sessionActivate(runtimeId: string): Promise<SessionSnapshot> {
+    if (this.httpSelection) throw unsupportedHttpFallback("session.activate")
+    const raw = await this.request("session.activate", { session_id: runtimeId })
+    const snapshot = normalizeSessionSnapshot(rawSessionSnapshotSchema.parse(raw))
+    if (snapshot.identity.runtimeId !== runtimeId) {
+      throw new Error("Hermes activated a different runtime session")
+    }
     assertGatewayContract(snapshot)
     return snapshot
   }
@@ -1341,6 +1365,9 @@ function capabilityForMethod(method: string): keyof CapabilitySet | null {
   if (method.startsWith("secret.")) return "secrets"
   if (method === "session.branch") return "branch"
   if (method === "session.compress") return "compress"
+  // Live-session switching is additive to desktop contract 2. Older gateways
+  // may omit it while the rest of the sessions capability remains usable.
+  if (method === "session.active_list" || method === "session.activate") return null
   if (method.startsWith("session.") || method.startsWith("prompt.")) return "sessions"
   return null
 }

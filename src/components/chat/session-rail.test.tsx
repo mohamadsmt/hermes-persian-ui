@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { SessionRail } from "./session-rail";
+import type { SessionSummary } from "./ui-types";
 
 const labels = {
   title: "Conversations",
@@ -19,6 +20,12 @@ const labels = {
   confirmClose: "Close this conversation?",
   closeDescription: "History stays available.",
   renameTitle: "Rename conversation",
+  statusNeedsInput: "Needs your response",
+  statusError: "Conversation has an error",
+  statusStarting: "Conversation is starting",
+  statusWorking: "Conversation is working",
+  statusUnread: "Conversation completed with unread updates",
+  statusIdle: "Conversation is ready",
 };
 
 const sessions = [
@@ -29,6 +36,129 @@ const sessions = [
 afterEach(cleanup);
 
 describe("session capability controls", () => {
+  it("renders the highest-priority state with a distinct accessible indicator", () => {
+    const stateSessions: SessionSummary[] = [
+      {
+        storedId: "attention",
+        title: "Attention",
+        live: true,
+        runtimeStatus: "working",
+        needsInput: true,
+        error: "also failed",
+        unread: true,
+      },
+      {
+        storedId: "error",
+        title: "Error",
+        live: true,
+        runtimeStatus: "working",
+        error: "failed",
+        unread: true,
+      },
+      {
+        storedId: "starting",
+        title: "Starting",
+        live: true,
+        runtimeStatus: "starting",
+        unread: true,
+      },
+      {
+        storedId: "working",
+        title: "Working",
+        live: true,
+        runtimeStatus: "working",
+        unread: true,
+      },
+      {
+        storedId: "unread",
+        title: "Unread",
+        live: true,
+        runtimeStatus: "idle",
+        unread: true,
+      },
+      {
+        storedId: "idle",
+        title: "Idle",
+        live: true,
+        runtimeStatus: "idle",
+      },
+      { storedId: "history", title: "History", live: false },
+    ];
+    render(
+      <SessionRail
+        sessions={stateSessions}
+        locale="en"
+        labels={labels}
+        onCreate={vi.fn()}
+        onSelect={vi.fn()}
+        onRename={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+
+    const row = (id: string) => screen.getAllByTestId("session-item").find(
+      (item) => item.getAttribute("data-session-id") === id,
+    )!;
+    const expectStatus = (id: string, name: string, kind: string) => {
+      const indicator = within(row(id)).getByRole("img", { name });
+      expect(indicator).toHaveAttribute("data-session-status", kind);
+      expect(indicator).toHaveAttribute("title", name);
+      expect(indicator.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
+    };
+
+    expectStatus("attention", labels.statusNeedsInput, "needs-input");
+    expectStatus("error", labels.statusError, "error");
+    expectStatus("starting", labels.statusStarting, "starting");
+    expectStatus("working", labels.statusWorking, "working");
+    expectStatus("unread", labels.statusUnread, "unread");
+    expectStatus("idle", labels.statusIdle, "idle");
+    expect(within(row("history")).queryByTestId("session-status-indicator")).not.toBeInTheDocument();
+  });
+
+  it("prevents deleting a non-selected live conversation while preserving other actions", async () => {
+    const user = userEvent.setup();
+    const onDelete = vi.fn().mockResolvedValue(undefined);
+    const actionSessions: SessionSummary[] = [
+      { storedId: "selected-live", title: "Selected live", live: true, runtimeStatus: "working" },
+      { storedId: "background-live", title: "Background live", live: true, runtimeStatus: "working" },
+      { storedId: "historical", title: "Historical", live: false },
+      { storedId: "legacy-live", title: "Legacy live", status: "active" },
+    ];
+    render(
+      <SessionRail
+        sessions={actionSessions}
+        activeSessionId="selected-live"
+        locale="en"
+        labels={labels}
+        onCreate={vi.fn()}
+        onSelect={vi.fn()}
+        onRename={vi.fn()}
+        onDelete={onDelete}
+      />,
+    );
+
+    const row = (id: string) => screen.getAllByTestId("session-item").find(
+      (item) => item.getAttribute("data-session-id") === id,
+    )!;
+
+    await user.click(within(row("selected-live")).getByTestId("session-actions"));
+    await user.click(within(row("selected-live")).getByTestId("delete-session"));
+    await user.click(screen.getByTestId("confirm-delete"));
+    expect(onDelete).toHaveBeenCalledWith(expect.objectContaining({ storedId: "selected-live" }));
+
+    await user.click(within(row("background-live")).getByTestId("session-actions"));
+    expect(within(row("background-live")).getByTestId("rename-session")).toBeInTheDocument();
+    expect(within(row("background-live")).queryByTestId("delete-session")).not.toBeInTheDocument();
+    await user.click(within(row("background-live")).getByTestId("session-actions"));
+
+    await user.click(within(row("legacy-live")).getByTestId("session-actions"));
+    expect(within(row("legacy-live")).queryByTestId("delete-session")).not.toBeInTheDocument();
+    await user.click(within(row("legacy-live")).getByTestId("session-actions"));
+
+    await user.click(within(row("historical")).getByTestId("session-actions"));
+    expect(within(row("historical")).getByTestId("delete-session")).toBeInTheDocument();
+  });
+
   it("offers usage and confirmed close only for the live active session", async () => {
     const user = userEvent.setup();
     const onClose = vi.fn().mockResolvedValue(undefined);

@@ -3,15 +3,21 @@
 import {
   Archive,
   ChartNoAxesColumn,
+  CircleCheck,
+  CircleDashed,
+  CirclePause,
   CircleX,
   FileSearch,
   LoaderCircle,
   MessageSquarePlus,
+  MessageCircleQuestion,
   MoreHorizontal,
   Pencil,
   Search,
+  TriangleAlert,
   Trash2,
   X,
+  type LucideIcon,
 } from "lucide-react";
 import { FormEvent, useMemo, useState, type ReactNode } from "react";
 
@@ -47,6 +53,12 @@ type SessionRailProps = {
     searching?: string;
     searchUnavailable?: string;
     messageMatch?: string;
+    statusNeedsInput?: string;
+    statusError?: string;
+    statusStarting?: string;
+    statusWorking?: string;
+    statusUnread?: string;
+    statusIdle?: string;
   };
   canCreate?: boolean;
   canManage?: boolean;
@@ -66,6 +78,145 @@ type SessionRailProps = {
   projectBrowser?: ReactNode;
   projectRecentSessions?: SessionSummary[];
 };
+
+type SessionIndicatorKind =
+  | "needs-input"
+  | "error"
+  | "starting"
+  | "working"
+  | "unread"
+  | "idle";
+
+type SessionStatusLabels = Required<Pick<SessionRailProps["labels"],
+  | "statusNeedsInput"
+  | "statusError"
+  | "statusStarting"
+  | "statusWorking"
+  | "statusUnread"
+  | "statusIdle"
+>>;
+
+type SessionIndicator = {
+  kind: SessionIndicatorKind;
+  label: string;
+  icon: LucideIcon;
+  className: string;
+  animated?: boolean;
+};
+
+function statusLabels(locale: string, labels: SessionRailProps["labels"]): SessionStatusLabels {
+  const defaults = locale.startsWith("fa") ? {
+    statusNeedsInput: "نیازمند پاسخ شما",
+    statusError: "گفت‌وگو با خطا روبه‌رو شده است",
+    statusStarting: "گفت‌وگو در حال شروع است",
+    statusWorking: "گفت‌وگو در حال اجراست",
+    statusUnread: "گفت‌وگو به‌روزرسانی خوانده‌نشده دارد",
+    statusIdle: "گفت‌وگو آماده است",
+  } : {
+    statusNeedsInput: "Needs your response",
+    statusError: "Conversation has an error",
+    statusStarting: "Conversation is starting",
+    statusWorking: "Conversation is working",
+    statusUnread: "Conversation has unread updates",
+    statusIdle: "Conversation is ready",
+  };
+
+  return {
+    statusNeedsInput: labels.statusNeedsInput ?? defaults.statusNeedsInput,
+    statusError: labels.statusError ?? defaults.statusError,
+    statusStarting: labels.statusStarting ?? defaults.statusStarting,
+    statusWorking: labels.statusWorking ?? defaults.statusWorking,
+    statusUnread: labels.statusUnread ?? defaults.statusUnread,
+    statusIdle: labels.statusIdle ?? defaults.statusIdle,
+  };
+}
+
+function isLiveSession(session: SessionSummary): boolean {
+  if (session.live !== undefined) return session.live;
+  return session.status === "active" || session.runtimeStatus !== undefined;
+}
+
+function sessionIndicator(
+  session: SessionSummary,
+  labels: SessionStatusLabels,
+): SessionIndicator | null {
+  if (session.needsInput || session.runtimeStatus === "waiting") {
+    return {
+      kind: "needs-input",
+      label: labels.statusNeedsInput,
+      icon: MessageCircleQuestion,
+      className: "text-warning-foreground",
+    };
+  }
+  if (session.error) {
+    return {
+      kind: "error",
+      label: labels.statusError,
+      icon: TriangleAlert,
+      className: "text-destructive",
+    };
+  }
+  if (session.runtimeStatus === "starting") {
+    return {
+      kind: "starting",
+      label: labels.statusStarting,
+      icon: CircleDashed,
+      className: "text-primary",
+      animated: true,
+    };
+  }
+  if (session.runtimeStatus === "working") {
+    return {
+      kind: "working",
+      label: labels.statusWorking,
+      icon: LoaderCircle,
+      className: "text-primary",
+      animated: true,
+    };
+  }
+  if (session.unread) {
+    return {
+      kind: "unread",
+      label: labels.statusUnread,
+      icon: CircleCheck,
+      className: "text-success",
+    };
+  }
+  if (session.runtimeStatus === "idle" || isLiveSession(session)) {
+    return {
+      kind: "idle",
+      label: labels.statusIdle,
+      icon: CirclePause,
+      className: "text-muted-foreground",
+    };
+  }
+  return null;
+}
+
+function SessionStatusIndicator({
+  indicator,
+}: {
+  indicator: SessionIndicator | null;
+}) {
+  if (!indicator) return null;
+  const Icon = indicator.icon;
+  return (
+    <span
+      aria-label={indicator.label}
+      className={`inline-flex shrink-0 ${indicator.className}`}
+      data-session-status={indicator.kind}
+      data-testid="session-status-indicator"
+      role="img"
+      title={indicator.label}
+    >
+      <Icon
+        aria-hidden="true"
+        className={indicator.animated ? "animate-spin motion-reduce:animate-none" : undefined}
+        size={14}
+      />
+    </span>
+  );
+}
 
 export function SessionRail({
   sessions,
@@ -98,6 +249,7 @@ export function SessionRail({
   const [deleteTarget, setDeleteTarget] = useState<SessionSummary | null>(null);
   const [closeTarget, setCloseTarget] = useState<SessionSummary | null>(null);
   const [busy, setBusy] = useState(false);
+  const sessionStatusLabels = statusLabels(locale, labels);
   const remoteSearch = useSessionSearch({
     debounceMs: searchDebounceMs,
     enabled: searchEnabled ?? Boolean(searchProfile && onSelectSearchResult),
@@ -202,7 +354,8 @@ export function SessionRail({
 
   function renderSessionRow(session: SessionSummary) {
     const active = session.storedId === activeSessionId;
-    const deletable = active || session.status !== "active";
+    const deletable = active || !isLiveSession(session);
+    const indicator = sessionIndicator(session, sessionStatusLabels);
     const messageMatch = remoteSearch.results.find((result) => (
       result.sessionId === session.storedId ||
       result.sessionId === session.runtimeId ||
@@ -224,7 +377,10 @@ export function SessionRail({
           onClick={() => onSelect(session)}
           disabled={!canManage}
         >
-          <span className="session-row__title bidi-block">{session.title}</span>
+          <span className="flex min-w-0 items-center gap-2">
+            <SessionStatusIndicator indicator={indicator} />
+            <span className="session-row__title bidi-block min-w-0">{session.title}</span>
+          </span>
           <span className="session-row__meta">
             {session.model ? (
               <bdi dir="ltr" className="technical-inline">

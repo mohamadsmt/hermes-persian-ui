@@ -231,7 +231,7 @@ async function main(): Promise<void> {
       ? `Bearer ${process.env.HERMES_API_KEY}`
       : undefined,
   )
-  let session: TemporarySession | null = null
+  const sessions: TemporarySession[] = []
   let failure: unknown
 
   try {
@@ -255,32 +255,17 @@ async function main(): Promise<void> {
       log(`route: ${currentProvider}/${currentModel}; ${modelCount} configured model option(s)`)
     }
 
-    const title = `Hermes UI smoke ${new Date().toISOString()} ${randomUUID().slice(0, 8)}`
-    const createPayload = asRecord(
-      await client.request("session.create", {
-        cols: 100,
-        source: "web",
-        title,
-        close_on_disconnect: true,
-        ...(recovery ? { cwd: recovery.workspace } : {}),
-        ...(process.env.HERMES_PROFILE?.trim() ? { profile: process.env.HERMES_PROFILE.trim() } : {}),
-      }),
-      "session.create",
-    )
-    const runtimeId = requiredString(createPayload.session_id, "session.create.session_id")
-    const storedId = requiredString(
-      createPayload.stored_session_id ?? createPayload.session_key,
-      "session.create.stored_session_id",
-    )
-    session = { runtimeId, storedId, promptSubmitted: false, turnCompleted: false }
-    const info = isRecord(createPayload.info) ? createPayload.info : {}
-    const gatewayContract = info.desktop_contract
-    if (typeof gatewayContract !== "number" || gatewayContract < MIN_GATEWAY_CONTRACT_VERSION) {
-      throw new Error(
-        `Hermes session contract mismatch: requires >=${MIN_GATEWAY_CONTRACT_VERSION}, received ${String(gatewayContract ?? "missing")}`,
-      )
+    const titleSeed = `Hermes UI smoke ${new Date().toISOString()} ${randomUUID().slice(0, 8)}`
+    const primarySession = await createTemporarySession(client, sessions, {
+      title: recovery ? titleSeed : `${titleSeed} A`,
+      ...(recovery ? { cwd: recovery.workspace } : {}),
+    })
+    const { runtimeId } = primarySession
+
+    if (!recovery) {
+      await createTemporarySession(client, sessions, { title: `${titleSeed} B` })
+      await verifyConcurrentSessions(client, sessions)
     }
-    log(`session: created temporary runtime ${runtimeId}; gateway contract v${gatewayContract}`)
 
     await verifySlashCommands(client, runtimeId)
 
@@ -294,7 +279,7 @@ async function main(): Promise<void> {
         runtimeId,
         timeoutFromEnv("HERMES_SMOKE_TURN_TIMEOUT_MS", DEFAULT_TURN_TIMEOUT_MS),
       )
-      session.promptSubmitted = true
+      primarySession.promptSubmitted = true
       await client.request(
         "prompt.submit",
         {
@@ -304,19 +289,19 @@ async function main(): Promise<void> {
         timeoutFromEnv("HERMES_SMOKE_RPC_TIMEOUT_MS", DEFAULT_RPC_TIMEOUT_MS),
       )
       await turn
-      session.turnCompleted = true
+      primarySession.turnCompleted = true
       log("prompt: observed non-empty delta and message.complete")
     }
   } catch (error) {
     failure = error
   } finally {
-    const cleanupError = await cleanupTemporarySession(client, session)
+    const cleanupError = await cleanupTemporarySessions(client, sessions)
     client.close()
     await target.stop?.()
     const recoveryCleanupError = await cleanupRecoveryFixture(recovery)
     const cleanupErrors = [cleanupError, recoveryCleanupError].filter((error): error is Error => Boolean(error))
     if (cleanupErrors.length) {
-      const id = session?.storedId ?? "unknown"
+      const id = sessions.map((session) => session.storedId).join(", ") || "unknown"
       const cleanupFailure = new AggregateError(cleanupErrors, `Temporary smoke cleanup failed (${id})`)
       failure = failure ? new AggregateError([failure, cleanupFailure], "Smoke and cleanup both failed") : cleanupFailure
     }
@@ -324,6 +309,91 @@ async function main(): Promise<void> {
 
   if (failure) throw failure
   log(`PASS (${allowBilling ? "live prompt" : "connectivity only"})`)
+}
+
+async function createTemporarySession(
+  client: GatewayRpcClient,
+  sessions: TemporarySession[],
+  options: { cwd?: string; title: string },
+): Promise<TemporarySession> {
+  const createPayload = asRecord(
+    await client.request("session.create", {
+      cols: 100,
+      source: "web",
+      title: options.title,
+      close_on_disconnect: true,
+      ...(options.cwd ? { cwd: options.cwd } : {}),
+      ...(process.env.HERMES_PROFILE?.trim() ? { profile: process.env.HERMES_PROFILE.trim() } : {}),
+    }),
+    "session.create",
+  )
+  const runtimeId = requiredString(createPayload.session_id, "session.create.session_id")
+  const storedId = requiredString(
+    createPayload.stored_session_id ?? createPayload.session_key,
+    "session.create.stored_session_id",
+  )
+  const session = { runtimeId, storedId, promptSubmitted: false, turnCompleted: false }
+  sessions.push(session)
+
+  const info = isRecord(createPayload.info) ? createPayload.info : {}
+  const gatewayContract = info.desktop_contract
+  if (typeof gatewayContract !== "number" || gatewayContract < MIN_GATEWAY_CONTRACT_VERSION) {
+    throw new Error(
+      `Hermes session contract mismatch: requires >=${MIN_GATEWAY_CONTRACT_VERSION}, received ${String(gatewayContract ?? "missing")}`,
+    )
+  }
+  log(`session: created temporary runtime ${runtimeId}; gateway contract v${gatewayContract}`)
+  return session
+}
+
+async function verifyConcurrentSessions(
+  client: GatewayRpcClient,
+  sessions: TemporarySession[],
+): Promise<void> {
+  const currentSession = sessions[1]
+  if (!currentSession || sessions.length !== 2) {
+    throw new Error(`Concurrent smoke requires exactly two temporary sessions, received ${sessions.length}`)
+  }
+  const activePayload = asRecord(
+    await client.request("session.active_list", { current_session_id: currentSession.runtimeId }),
+    "session.active_list",
+  )
+  if (!Array.isArray(activePayload.sessions)) {
+    throw new Error("Hermes session.active_list is missing sessions")
+  }
+
+  for (const expected of sessions) {
+    const active = activePayload.sessions.find((candidate) => (
+      isRecord(candidate) && candidate.id === expected.runtimeId
+    ))
+    if (!isRecord(active)) {
+      throw new Error(`Hermes session.active_list is missing runtime ${expected.runtimeId}`)
+    }
+    const storedId = requiredString(active.session_key, "session.active_list.sessions[].session_key")
+    if (storedId !== expected.storedId) {
+      throw new Error(
+        `Hermes session.active_list identity mismatch for ${expected.runtimeId}: expected ${expected.storedId}, received ${storedId}`,
+      )
+    }
+  }
+
+  for (const expected of sessions) {
+    const activated = asRecord(
+      await client.request("session.activate", { session_id: expected.runtimeId }),
+      "session.activate",
+    )
+    const runtimeId = requiredString(activated.session_id, "session.activate.session_id")
+    const storedId = requiredString(
+      activated.stored_session_id ?? activated.session_key,
+      "session.activate.stored_session_id",
+    )
+    if (runtimeId !== expected.runtimeId || storedId !== expected.storedId) {
+      throw new Error(
+        `Hermes session.activate identity mismatch: expected ${expected.runtimeId}/${expected.storedId}, received ${runtimeId}/${storedId}`,
+      )
+    }
+  }
+  log("concurrency: two live sessions listed and independently activated")
 }
 
 async function verifySlashCommands(client: GatewayRpcClient, runtimeId: string): Promise<void> {
@@ -640,11 +710,24 @@ async function waitForTurn(client: GatewayRpcClient, sessionId: string, timeoutM
   })
 }
 
+async function cleanupTemporarySessions(
+  client: GatewayRpcClient,
+  sessions: TemporarySession[],
+): Promise<Error | null> {
+  const errors: Error[] = []
+  for (const session of [...sessions].reverse()) {
+    const error = await cleanupTemporarySession(client, session)
+    if (error) errors.push(error)
+  }
+  if (errors.length) return new AggregateError(errors, "one or more temporary sessions failed cleanup")
+  if (sessions.length) log(`cleanup: closed and cleared ${sessions.length} temporary session(s)`)
+  return null
+}
+
 async function cleanupTemporarySession(
   client: GatewayRpcClient,
-  session: TemporarySession | null,
+  session: TemporarySession,
 ): Promise<Error | null> {
-  if (!session) return null
   const errors: Error[] = []
   if (session.promptSubmitted && !session.turnCompleted) {
     await client.request("session.interrupt", { session_id: session.runtimeId }).catch((error: unknown) => {
@@ -661,7 +744,6 @@ async function cleanupTemporarySession(
     if (!(error instanceof RpcError && error.code === 4007 && !session.promptSubmitted)) errors.push(toError(error))
   })
   if (errors.length) return new AggregateError(errors, "one or more cleanup operations failed")
-  log("cleanup: closed and cleared the temporary session")
   return null
 }
 

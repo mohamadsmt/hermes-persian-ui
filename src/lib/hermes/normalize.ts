@@ -1,5 +1,7 @@
 import type {
+  ActiveSessionItem,
   HermesEvent,
+  LiveSessionStatus,
   Message,
   ModelOption,
   PendingPrompt,
@@ -10,6 +12,7 @@ import type {
   UsageStats,
 } from "./types"
 import type {
+  RawActiveSessionItem,
   RawGatewayEvent,
   RawSessionMessage,
   RawSessionRuntimeInfo,
@@ -113,17 +116,47 @@ export function normalizeRuntimeInfo(raw: RawSessionRuntimeInfo | undefined): Se
   }
 }
 
+export function normalizeActiveSessionItem(raw: RawActiveSessionItem): ActiveSessionItem {
+  return {
+    identity: {
+      runtimeId: raw.id,
+      storedId: raw.session_key ?? raw.id,
+    },
+    current: raw.current ?? false,
+    status: raw.status,
+    ...(raw.title === undefined ? {} : { title: raw.title }),
+    ...(raw.preview === undefined ? {} : { preview: raw.preview }),
+    ...(raw.model === undefined ? {} : { model: raw.model }),
+    messageCount: raw.message_count ?? 0,
+    ...(raw.started_at === undefined ? {} : { startedAt: raw.started_at }),
+    ...(raw.last_active === undefined ? {} : { lastActive: raw.last_active }),
+  }
+}
+
+function normalizeLiveSessionStatus(
+  status: string | undefined,
+  running: boolean | undefined,
+): LiveSessionStatus | undefined {
+  if (status === "idle" || status === "starting" || status === "waiting" || status === "working") {
+    return status
+  }
+  if (status === undefined) return undefined
+  return running || status === "streaming" ? "working" : "idle"
+}
+
 export function normalizeSessionSnapshot(raw: RawSessionSnapshot, fallbackStoredId?: string): SessionSnapshot {
   const storedId = raw.stored_session_id ?? raw.session_key ?? raw.resumed ?? fallbackStoredId ?? raw.session_id
   const messages = raw.messages.map(normalizeMessage)
+  const status = normalizeLiveSessionStatus(raw.status, raw.running)
   return {
     identity: { storedId, runtimeId: raw.session_id },
     messages,
     messageCount: raw.message_count ?? messages.length,
+    ...(raw.started_at === undefined ? {} : { startedAt: raw.started_at }),
     ...(raw.info ? { info: normalizeRuntimeInfo(raw.info) } : {}),
     ...(raw.inflight === undefined ? {} : { inflight: raw.inflight }),
     ...(raw.running === undefined ? {} : { running: raw.running }),
-    ...(raw.status === undefined ? {} : { status: raw.status }),
+    ...(status === undefined ? {} : { status }),
   }
 }
 

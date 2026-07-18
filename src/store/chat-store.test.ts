@@ -121,6 +121,32 @@ describe("chat UI store", () => {
     expect(useChatUiStore.getState().queuedPrompts["stored-b"]).toEqual(["other"]);
   });
 
+  it("records a background artifact without stealing the visible artifact selection", () => {
+    const state = useChatUiStore.getState();
+    state.addArtifact("default:active", {
+      id: "active-artifact",
+      title: "active.md",
+      kind: "markdown",
+      content: "active",
+    });
+    state.addArtifact("default:background", {
+      id: "background-artifact",
+      title: "background.md",
+      kind: "markdown",
+      content: "background",
+    }, { select: false });
+
+    expect(useChatUiStore.getState()).toMatchObject({
+      artifactRailOpen: true,
+      selectedArtifactIds: {
+        "default:active": "active-artifact",
+      },
+      artifacts: {
+        "default:background": [{ id: "background-artifact" }],
+      },
+    });
+  });
+
   it("keeps the resizable rail within usable desktop bounds", () => {
     expect(__testing.clampRailWidth(20)).toBe(280);
     expect(__testing.clampRailWidth(420)).toBe(420);

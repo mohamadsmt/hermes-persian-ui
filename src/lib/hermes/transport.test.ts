@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest"
 import { negotiateHttpFallback, parseSse } from "./http-fallback"
 import { contentToText, normalizeSessionSnapshot, pendingPromptFromEvent, reduceHermesEventState, emptyHermesEventState } from "./normalize"
 import { JsonRpcGatewayClient, HermesRpcError, isMethodNotFound } from "./rpc-client"
-import { rawSessionSnapshotSchema } from "./schemas"
+import { rawActiveSessionListSchema, rawSessionSnapshotSchema } from "./schemas"
 import { BrowserHermesTransport } from "./transport"
 
 class FakeSocket extends EventTarget {
@@ -87,6 +87,142 @@ describe("JSON-RPC gateway client", () => {
     await expect(resultPromise).rejects.toMatchObject({ name: "AbortError" })
     socket.receive({ jsonrpc: "2.0", id: sent.id, result: { messages: [] } })
     await Promise.resolve()
+  })
+})
+
+describe("Hermes live-session transport", () => {
+  it("serializes active-list focus and normalizes runtime and stored identities", async () => {
+    const { socket, transport } = await connectedGatewayTransport()
+    const listing = transport.sessionActiveList("runtime-b")
+    const request = await waitForRpcRequest(socket, 0)
+    expect(request).toMatchObject({
+      method: "session.active_list",
+      params: { current_session_id: "runtime-b" },
+    })
+    socket.receive({
+      jsonrpc: "2.0",
+      id: request.id,
+      result: {
+        sessions: [
+          {
+            id: "runtime-a",
+            session_key: "stored-a",
+            status: "idle",
+            title: "Research",
+            message_count: 3,
+            started_at: 10,
+            last_active: 20,
+          },
+          {
+            id: "runtime-b",
+            session_key: "stored-b",
+            current: true,
+            status: "waiting",
+            preview: "Choose an option",
+            model: "gpt-5.6-sol",
+          },
+        ],
+      },
+    })
+
+    await expect(listing).resolves.toEqual([
+      {
+        identity: { runtimeId: "runtime-a", storedId: "stored-a" },
+        current: false,
+        status: "idle",
+        title: "Research",
+        messageCount: 3,
+        startedAt: 10,
+        lastActive: 20,
+      },
+      {
+        identity: { runtimeId: "runtime-b", storedId: "stored-b" },
+        current: true,
+        status: "waiting",
+        preview: "Choose an option",
+        model: "gpt-5.6-sol",
+        messageCount: 0,
+      },
+    ])
+    transport.disconnect()
+  })
+
+  it("normalizes session.activate as an authoritative live snapshot", async () => {
+    const { socket, transport } = await connectedGatewayTransport()
+    const activating = transport.sessionActivate("runtime-b")
+    const request = await waitForRpcRequest(socket, 0)
+    expect(request).toMatchObject({
+      method: "session.activate",
+      params: { session_id: "runtime-b" },
+    })
+    socket.receive({
+      jsonrpc: "2.0",
+      id: request.id,
+      result: {
+        session_id: "runtime-b",
+        session_key: "stored-b",
+        message_count: 1,
+        messages: [{ role: "user", text: "continue" }],
+        inflight: { user: "continue", assistant: "partial", streaming: true },
+        info: { desktop_contract: 2, model: "gpt-5.6-sol" },
+        running: true,
+        started_at: 42,
+        status: "working",
+      },
+    })
+
+    await expect(activating).resolves.toMatchObject({
+      identity: { runtimeId: "runtime-b", storedId: "stored-b" },
+      messageCount: 1,
+      messages: [{ role: "user", content: "continue" }],
+      inflight: { user: "continue", assistant: "partial", streaming: true },
+      info: { contract: 2, model: "gpt-5.6-sol" },
+      running: true,
+      startedAt: 42,
+      status: "working",
+    })
+    transport.disconnect()
+  })
+
+  it("preserves method-not-found for ChatShell fallback without disabling sessions", async () => {
+    const { socket, transport } = await connectedGatewayTransport()
+    const activating = transport.sessionActivate("runtime-old")
+    const request = await waitForRpcRequest(socket, 0)
+    socket.receive({
+      jsonrpc: "2.0",
+      id: request.id,
+      error: { code: -32601, message: "method not found" },
+    })
+
+    const error = await activating.catch((value: unknown) => value)
+    expect(isMethodNotFound(error)).toBe(true)
+    expect(transport.capabilities.sessions).toBe(true)
+    transport.disconnect()
+  })
+
+  it("rejects invalid live statuses at the gateway boundary", () => {
+    expect(
+      rawActiveSessionListSchema.safeParse({
+        sessions: [{ id: "runtime-1", session_key: "stored-1", status: "streaming" }],
+      }).success,
+    ).toBe(false)
+  })
+
+  it("keeps live-session methods unsupported in HTTP fallback mode", async () => {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input) === "/api/hermes/bootstrap") return httpOnlyBootstrap()
+      return jsonResponse({ endpoints: { responses: { method: "POST", path: "/v1/responses" } } })
+    }) as typeof fetch
+    const transport = new BrowserHermesTransport({ fetch: fetchImpl, reconnect: false })
+    await transport.connect()
+
+    await expect(transport.sessionActiveList()).rejects.toThrow(
+      "Hermes session.active_list is unavailable in HTTP fallback mode",
+    )
+    await expect(transport.sessionActivate("runtime-1")).rejects.toThrow(
+      "Hermes session.activate is unavailable in HTTP fallback mode",
+    )
+    transport.disconnect()
   })
 })
 

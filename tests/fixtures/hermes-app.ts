@@ -34,6 +34,83 @@ export class HermesApp {
     return this.page.getByTestId("connection-status");
   }
 
+  currentSessionId(): string | undefined {
+    const pathname = new URL(this.page.url()).pathname;
+    const match = pathname.match(/\/(?:fa|en)\/c\/([^/?#]+)/u);
+    return match?.[1] ? decodeURIComponent(match[1]) : undefined;
+  }
+
+  sessionItem(storedId: string): Locator {
+    return this.page.locator(
+      `[data-testid="session-item"][data-session-id="${storedId}"]`,
+    );
+  }
+
+  sessionStatus(storedId: string): Locator {
+    return this.sessionItem(storedId).getByTestId("session-status-indicator");
+  }
+
+  async gatewayRpc<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
+    return this.page.evaluate(
+      ({ rpcMethod, rpcParams }) => new Promise<T>((resolve, reject) => {
+        const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+        const socket = new WebSocket(
+          `${protocol}//${window.location.host}/api/hermes/ws`,
+        );
+        const requestId = `e2e-control-${Date.now()}-${Math.random()}`;
+        const timeout = window.setTimeout(() => {
+          socket.close();
+          reject(new Error(`Timed out waiting for test gateway RPC: ${rpcMethod}`));
+        }, 10_000);
+        const finish = () => {
+          window.clearTimeout(timeout);
+          if (socket.readyState === WebSocket.OPEN) socket.close();
+        };
+
+        socket.addEventListener("open", () => {
+          socket.send(JSON.stringify({
+            jsonrpc: "2.0",
+            id: requestId,
+            method: rpcMethod,
+            params: rpcParams,
+          }));
+        });
+        socket.addEventListener("message", (event) => {
+          let frame: {
+            id?: string;
+            result?: T;
+            error?: { message?: string };
+          };
+          try {
+            frame = JSON.parse(String(event.data)) as typeof frame;
+          } catch {
+            return;
+          }
+          if (frame.id !== requestId) return;
+          finish();
+          if (frame.error) reject(new Error(frame.error.message || `Gateway RPC failed: ${rpcMethod}`));
+          else resolve(frame.result as T);
+        });
+        socket.addEventListener("error", () => {
+          finish();
+          reject(new Error(`Could not open test gateway control socket: ${rpcMethod}`));
+        });
+      }),
+      { rpcMethod: method, rpcParams: params },
+    );
+  }
+
+  async activeRuntimeId(storedId: string): Promise<string> {
+    const result = await this.gatewayRpc<{
+      sessions: Array<{ id: string; session_key: string }>;
+    }>("session.active_list");
+    const runtimeId = result.sessions.find(
+      (session) => session.session_key === storedId,
+    )?.id;
+    if (!runtimeId) throw new Error(`No active runtime found for ${storedId}`);
+    return runtimeId;
+  }
+
   messages(role?: "assistant" | "system" | "tool" | "user"): Locator {
     const selector = role
       ? `[data-testid="message"][data-role="${role}"]`
@@ -57,12 +134,14 @@ export class HermesApp {
       name: /بازکردن فهرست گفت‌وگوها|open conversations/iu,
     });
 
-    // Opening the rail is idempotent in the product. On narrow viewports we
-    // always drive that explicit state transition so a route-change closing
-    // animation cannot race a stale bounding-box probe.
+    // Opening the rail is idempotent in the product. A failed transactional
+    // action intentionally leaves it open, so do not click through its overlay.
     if (await mobileTrigger.isVisible()) {
-      await mobileTrigger.click();
-      await expect(this.page.locator(".session-rail")).toHaveClass(
+      const rail = this.page.locator(".session-rail");
+      if (!(await rail.getAttribute("class"))?.includes("session-rail--mobile-open")) {
+        await mobileTrigger.click();
+      }
+      await expect(rail).toHaveClass(
         /session-rail--mobile-open/u,
       );
       await expect(newSession).toBeInViewport();
@@ -108,6 +187,18 @@ export class HermesApp {
     if (await dialogSubmit.isVisible()) await dialogSubmit.click();
     await expect.poll(() => this.page.url()).not.toBe(previousUrl);
     await expect(this.page).toHaveURL(/\/(?:fa|en)\/c\/[^/?#]+\?profile=[^&#]+$/u);
+  }
+
+  async selectSession(storedId: string): Promise<void> {
+    await this.openSessionRail();
+    const item = this.sessionItem(storedId);
+    await expect(item).toBeVisible();
+    await item.locator(".session-row__main").click();
+    await expect(this.page).toHaveURL(
+      new RegExp(`/(?:fa|en)/c/${storedId}\\?profile=[^&#]+$`, "u"),
+    );
+    await expect(this.composer).toBeVisible();
+    await expect(this.composer).toBeEnabled();
   }
 
   async ensureSession(): Promise<void> {

@@ -23,7 +23,11 @@ type ChatUiState = {
   setMobileRail: (rail: Rail | null) => void;
   setArtifactRailOpen: (open: boolean) => void;
   setArtifactRailWidth: (width: number) => void;
-  addArtifact: (sessionKey: string, artifact: Artifact) => void;
+  addArtifact: (
+    sessionKey: string,
+    artifact: Artifact,
+    options?: { select?: boolean },
+  ) => void;
   clearArtifacts: (sessionKey: string) => void;
   selectArtifact: (sessionKey: string, id: string | null) => void;
   setDraft: (sessionId: string, value: string) => void;
@@ -63,10 +67,11 @@ export const useChatUiStore = create<ChatUiState>((set, get) => ({
   setArtifactRailOpen: (artifactRailOpen) => set({ artifactRailOpen }),
   setArtifactRailWidth: (artifactRailWidth) =>
     set({ artifactRailWidth: clampRailWidth(artifactRailWidth) }),
-  addArtifact: (sessionKey, artifact) =>
+  addArtifact: (sessionKey, artifact, options) =>
     set((state) => {
       const current = state.artifacts[sessionKey] ?? [];
       const exists = current.some((item) => item.id === artifact.id);
+      const select = options?.select ?? true;
       return {
         artifacts: {
           ...state.artifacts,
@@ -74,8 +79,10 @@ export const useChatUiStore = create<ChatUiState>((set, get) => ({
             ? current.map((item) => (item.id === artifact.id ? artifact : item))
             : [artifact, ...current],
         },
-        selectedArtifactIds: { ...state.selectedArtifactIds, [sessionKey]: artifact.id },
-        artifactRailOpen: true,
+        selectedArtifactIds: select
+          ? { ...state.selectedArtifactIds, [sessionKey]: artifact.id }
+          : state.selectedArtifactIds,
+        artifactRailOpen: select ? true : state.artifactRailOpen,
       };
     }),
   clearArtifacts: (sessionKey) =>
