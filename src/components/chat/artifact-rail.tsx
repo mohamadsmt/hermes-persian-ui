@@ -1,6 +1,6 @@
 "use client";
 
-import { Code2, FileDiff, FileText, ImageIcon, PanelLeftClose, X } from "lucide-react";
+import { Code2, FileDiff, FileText, ImageIcon, PanelLeftClose, Pin, PinOff, X } from "lucide-react";
 import { PointerEvent as ReactPointerEvent } from "react";
 
 import { MarkdownRenderer } from "./markdown-renderer";
@@ -11,16 +11,20 @@ type ArtifactRailProps = {
   selectedId: string | null;
   open: boolean;
   mobileOpen?: boolean;
+  pinned?: boolean;
   width: number;
   labels: {
     title: string;
     empty: string;
     close: string;
+    pin: string;
     resize: string;
+    unpin: string;
     previewUnavailable: string;
   };
   onSelect: (id: string) => void;
   onClose: () => void;
+  onTogglePin?: () => void;
   onWidthChange: (width: number) => void;
 };
 
@@ -38,10 +42,12 @@ export function ArtifactRail({
   selectedId,
   open,
   mobileOpen,
+  pinned = false,
   width,
   labels,
   onSelect,
   onClose,
+  onTogglePin,
   onWidthChange,
 }: ArtifactRailProps) {
   const selected = artifacts.find((artifact) => artifact.id === selectedId) ?? artifacts[0];
@@ -79,10 +85,23 @@ export function ArtifactRail({
       />
       <header className="rail-title-row artifact-rail__header">
         <h2>{labels.title}</h2>
-        <button type="button" className="icon-button" onClick={onClose} aria-label={labels.close}>
-          <PanelLeftClose aria-hidden="true" className="header-wide-action" size={19} />
-          <X aria-hidden="true" className="header-mobile-action" size={20} />
-        </button>
+        <div className="artifact-rail__actions">
+          {onTogglePin ? (
+            <button
+              type="button"
+              className="icon-button header-wide-action"
+              onClick={onTogglePin}
+              aria-label={pinned ? labels.unpin : labels.pin}
+              aria-pressed={pinned}
+            >
+              {pinned ? <PinOff aria-hidden="true" size={17} /> : <Pin aria-hidden="true" size={17} />}
+            </button>
+          ) : null}
+          <button type="button" className="icon-button" onClick={onClose} aria-label={labels.close}>
+            <PanelLeftClose aria-hidden="true" className="header-wide-action" size={19} />
+            <X aria-hidden="true" className="header-mobile-action" size={20} />
+          </button>
+        </div>
       </header>
       {artifacts.length ? (
         <>

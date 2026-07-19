@@ -7,6 +7,7 @@ import {
   Mic,
   Paperclip,
   SendHorizonal,
+  Settings2,
   Square,
   Trash2,
   WandSparkles,
@@ -24,12 +25,27 @@ import {
   useState,
 } from "react";
 
+import type { CapabilitySet, ModelOption } from "@/lib/hermes";
 import type {
   CommandOption,
   ComposerAttachment,
+  KnownReasoningEffort,
+  SessionModelSettings,
   SlashCompletion,
 } from "./ui-types";
+import { REASONING_EFFORTS } from "./ui-types";
 import { filterCommandOptions } from "./command-catalog";
+
+const REASONING_LABELS: Record<KnownReasoningEffort, string> = {
+  none: "None",
+  minimal: "Minimal",
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "XHigh",
+  max: "Max",
+  ultra: "Ultra",
+};
 
 type ComposerProps = {
   sessionId: string;
@@ -37,6 +53,11 @@ type ComposerProps = {
   attachments: ComposerAttachment[];
   queue: string[];
   commands: CommandOption[];
+  models?: ModelOption[];
+  modelSettings?: SessionModelSettings;
+  profiles?: string[];
+  activeProfile?: string;
+  capabilities?: CapabilitySet;
   slashAvailable?: boolean;
   slashUnavailableReason?: string;
   disabled?: boolean;
@@ -60,6 +81,11 @@ type ComposerProps = {
     cancel: string;
     dropFiles: string;
     commandPalette: string;
+    settings: string;
+    model: string;
+    profile: string;
+    reasoning: string;
+    fastMode: string;
   };
   onChange: (value: string) => void;
   onSend: (value: string) => Promise<void> | void;
@@ -72,6 +98,10 @@ type ComposerProps = {
   onVoice?: (blob: Blob) => Promise<void> | void;
   onVoiceError?: (message: string) => void;
   onCompleteSlash?: (text: string, signal: AbortSignal) => Promise<SlashCompletion>;
+  onModelChange?: (model: ModelOption) => Promise<void> | void;
+  onProfileChange?: (profile: string) => Promise<void> | void;
+  onReasoningChange?: (reasoning: string) => Promise<void> | void;
+  onFastChange?: (fast: boolean) => Promise<void> | void;
 };
 
 type MenuOption = {
@@ -93,6 +123,11 @@ export function Composer({
   attachments,
   queue,
   commands,
+  models = [],
+  modelSettings = {},
+  profiles = [],
+  activeProfile,
+  capabilities,
   slashAvailable = true,
   slashUnavailableReason,
   disabled,
@@ -110,10 +145,16 @@ export function Composer({
   onVoice,
   onVoiceError,
   onCompleteSlash,
+  onModelChange,
+  onProfileChange,
+  onReasoningChange,
+  onFastChange,
 }: ComposerProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const settingsRootRef = useRef<HTMLDivElement>(null);
+  const settingsTriggerRef = useRef<HTMLButtonElement>(null);
   const composingRef = useRef(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
@@ -129,9 +170,27 @@ export function Composer({
   }>({ input: "", options: [] });
   const [selectionStart, setSelectionStart] = useState<number | null>(null);
   const [slashMenuDismissed, setSlashMenuDismissed] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const hasReadyAttachment = attachments.some((attachment) => attachment.status === "ready");
   const attachmentBusy = attachments.some(
     (attachment) => attachment.status === "pending" || attachment.status === "uploading",
+  );
+  const currentModel =
+    models.find(
+      (option) =>
+        option.id === modelSettings.model
+        && (!modelSettings.provider || option.provider === modelSettings.provider),
+    ) ?? models.find((option) => option.current);
+  const currentReasoning = modelSettings.reasoning ?? "";
+  const hasAuthoritativeReasoning = currentReasoning.length > 0;
+  const hasKnownReasoning = REASONING_EFFORTS.some(
+    (reasoning) => reasoning === currentReasoning,
+  );
+  const settingsAvailable = Boolean(
+    (capabilities?.models && models.length && onModelChange)
+    || (profiles.length > 1 && onProfileChange)
+    || (currentModel?.supportsReasoning && onReasoningChange)
+    || (currentModel?.supportsFast && onFastChange),
   );
 
   const cursorPosition = Math.max(0, Math.min(value.length, selectionStart ?? value.length));
@@ -206,11 +265,33 @@ export function Composer({
     };
   }, [onCompleteSlash, slashAvailable, slashInput, slashMenuDismissed]);
 
+  useEffect(() => {
+    if (!settingsOpen) return;
+    function closeSettings(restoreFocus = false) {
+      setSettingsOpen(false);
+      if (restoreFocus) requestAnimationFrame(() => settingsTriggerRef.current?.focus());
+    }
+    function onPointerDown(event: PointerEvent) {
+      if (!settingsRootRef.current?.contains(event.target as Node)) closeSettings();
+    }
+    function onKeyDown(event: globalThis.KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      closeSettings(true);
+    }
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [settingsOpen]);
+
   useLayoutEffect(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
     textarea.style.height = "0px";
-    textarea.style.height = `${Math.min(240, Math.max(48, textarea.scrollHeight))}px`;
+    textarea.style.height = `${Math.min(208, Math.max(36, textarea.scrollHeight))}px`;
   }, [value]);
 
   useLayoutEffect(() => {
@@ -566,6 +647,112 @@ export function Composer({
               event.target.value = "";
             }}
           />
+          {settingsAvailable ? (
+            <div className="composer-settings" ref={settingsRootRef}>
+              <button
+                ref={settingsTriggerRef}
+                type="button"
+                className="icon-button composer-settings__trigger"
+                aria-label={labels.settings}
+                aria-haspopup="dialog"
+                aria-expanded={settingsOpen}
+                data-testid="composer-settings-trigger"
+                onClick={() => setSettingsOpen((current) => !current)}
+              >
+                <Settings2 aria-hidden="true" size={18} />
+              </button>
+              {settingsOpen ? (
+                <section
+                  className="composer-settings__menu"
+                  aria-label={labels.settings}
+                  data-testid="composer-settings-menu"
+                  role="dialog"
+                >
+                  {capabilities?.models && models.length && onModelChange ? (
+                    <label className="composer-settings__field">
+                      <span>{labels.model}</span>
+                      <select
+                        data-testid="model-picker"
+                        value={currentModel ? `${currentModel.provider}:${currentModel.id}` : ""}
+                        onChange={(event) => {
+                          const option = models.find(
+                            (item) => `${item.provider}:${item.id}` === event.target.value,
+                          );
+                          if (option) void onModelChange(option);
+                        }}
+                        disabled={disabled || running}
+                        dir="ltr"
+                      >
+                        {models.map((model) => (
+                          <option
+                            value={`${model.provider}:${model.id}`}
+                            key={`${model.provider}:${model.id}`}
+                            disabled={!model.authenticated}
+                          >
+                            {model.id} · {model.providerName}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  ) : null}
+
+                  {profiles.length > 1 && onProfileChange ? (
+                    <label className="composer-settings__field">
+                      <span>{labels.profile}</span>
+                      <select
+                        data-testid="profile-picker"
+                        value={activeProfile ?? profiles[0]}
+                        onChange={(event) => void onProfileChange(event.target.value)}
+                        disabled={disabled || running}
+                        dir="ltr"
+                      >
+                        {profiles.map((profile) => (
+                          <option key={profile} value={profile} dir="ltr">
+                            {profile}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  ) : null}
+
+                  {currentModel?.supportsReasoning && onReasoningChange ? (
+                    <label className="composer-settings__field">
+                      <span>{labels.reasoning}</span>
+                      <select
+                        data-testid="reasoning-picker"
+                        value={currentReasoning}
+                        onChange={(event) => void onReasoningChange(event.target.value)}
+                        disabled={disabled || running || !hasAuthoritativeReasoning}
+                        dir="ltr"
+                      >
+                        {!hasAuthoritativeReasoning ? <option value="">—</option> : null}
+                        {hasAuthoritativeReasoning && !hasKnownReasoning ? (
+                          <option value={currentReasoning}>{currentReasoning}</option>
+                        ) : null}
+                        {REASONING_EFFORTS.map((reasoning) => (
+                          <option key={reasoning} value={reasoning}>
+                            {REASONING_LABELS[reasoning]}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  ) : null}
+
+                  {currentModel?.supportsFast && onFastChange ? (
+                    <label className="composer-settings__toggle">
+                      <span>{labels.fastMode}</span>
+                      <input
+                        type="checkbox"
+                        checked={modelSettings.fast ?? false}
+                        onChange={(event) => void onFastChange(event.target.checked)}
+                        disabled={disabled || running}
+                      />
+                    </label>
+                  ) : null}
+                </section>
+              ) : null}
+            </div>
+          ) : null}
           {attachmentsEnabled ? (
             <button
               type="button"

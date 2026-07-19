@@ -167,6 +167,27 @@ export class HermesApp {
     await this.openManagedConversations();
   }
 
+  async openWorkspaceNavigation(): Promise<void> {
+    const trigger = this.page.locator(".workspace-nav__mobile-trigger");
+    if (!(await trigger.isVisible())) return;
+    if ((await trigger.getAttribute("aria-expanded")) !== "true") {
+      await trigger.click();
+    }
+    await expect(trigger).toHaveAttribute("aria-expanded", "true");
+    await expect(this.page.locator(".workspace-nav__surface")).toHaveAttribute(
+      "role",
+      "dialog",
+    );
+  }
+
+  async openComposerSettings(): Promise<void> {
+    const menu = this.page.getByTestId("composer-settings-menu");
+    if (!(await menu.isVisible())) {
+      await this.page.getByTestId("composer-settings-trigger").click();
+    }
+    await expect(menu).toBeVisible();
+  }
+
   private async openManagedConversations(): Promise<void> {
     await expect(this.page.locator(".session-rail .session-skeleton")).toHaveCount(0, {
       timeout: 15_000,

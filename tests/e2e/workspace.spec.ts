@@ -7,11 +7,13 @@ test("keeps the active stream alive while navigating through Activity", async ({
   expect(storedId).toBeTruthy();
   await expect(page.getByTestId("stop-run")).toBeVisible();
 
+  await app.openWorkspaceNavigation();
   await page.getByRole("link", { name: "فعالیت‌ها" }).click();
   await expect(page).toHaveURL(/\/fa\/activity$/u);
   await expect(page.getByRole("heading", { name: "فعالیت‌ها", level: 1 })).toBeVisible();
   await expect(page.getByText("بهترین مدرک ثبت‌شده")).toBeVisible();
 
+  await app.openWorkspaceNavigation();
   await page.getByRole("link", { name: "گفت‌وگو" }).click();
   await expect(page).toHaveURL(
     new RegExp(`/fa/c/${storedId}\\?profile=default$`, "u"),
@@ -27,6 +29,7 @@ test("renders deterministic Automations and Knowledge details", async ({ app, pa
   await app.open("en");
   await app.ensureSession();
 
+  await app.openWorkspaceNavigation();
   await page.getByRole("link", { name: "Automations" }).click();
   await expect(page).toHaveURL(/\/en\/automations$/u);
   await expect(page.getByRole("heading", { name: "Automations", level: 1 })).toBeVisible();
@@ -39,6 +42,7 @@ test("renders deterministic Automations and Knowledge details", async ({ app, pa
   await page.getByRole("button", { name: "View output" }).click();
   await expect(page.getByText("Deterministic test output for the Hermes Workspace.")).toBeVisible();
 
+  await app.openWorkspaceNavigation();
   await page.getByRole("link", { name: "Knowledge" }).click();
   await expect(page).toHaveURL(/\/en\/knowledge$/u);
   await expect(page.getByRole("heading", { name: "Knowledge", level: 1 })).toBeVisible();

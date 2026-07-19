@@ -3,11 +3,10 @@
 import {Check, Languages, LockKeyhole, Monitor, Moon, Sun, Type} from "lucide-react";
 import {useLocale, useTranslations} from "next-intl";
 import {useTheme} from "next-themes";
-import type {ComponentType, SVGProps} from "react";
+import {useSyncExternalStore, type ComponentType, type SVGProps} from "react";
 
 import {BidiBlock} from "@/components/chat/bidi-text";
 import {Button} from "@/components/ui/button";
-import {Separator} from "@/components/ui/separator";
 import {Link} from "@/i18n/navigation";
 import type {AppLocale} from "@/i18n/routing";
 
@@ -19,6 +18,8 @@ const themeOptions: Array<{icon: Icon; label: "themeDark" | "themeLight" | "them
   {icon: Sun, label: "themeLight", value: "light"},
   {icon: Moon, label: "themeDark", value: "dark"},
 ];
+
+const subscribeToHydration = () => () => undefined;
 
 function SettingsSection({
   children,
@@ -32,18 +33,17 @@ function SettingsSection({
   title: string;
 }) {
   return (
-    <section className="rounded-2xl border border-border bg-surface shadow-surface">
-      <div className="flex items-start gap-3 p-5 sm:p-6">
-        <span className="mt-0.5 grid size-10 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary">
-          <IconComponent aria-hidden="true" className="size-5" />
+    <section className="settings-section grid min-w-0 sm:grid-cols-[minmax(12rem,0.75fr)_minmax(0,1.25fr)]">
+      <header className="flex items-start gap-3 p-4 sm:border-e sm:border-border sm:p-5">
+        <span className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary">
+          <IconComponent aria-hidden="true" className="size-4" />
         </span>
         <div className="min-w-0">
-          <h2 className="font-semibold text-foreground">{title}</h2>
-          <p className="mt-1 text-sm leading-6 text-muted-foreground">{description}</p>
+          <h2 className="text-sm font-semibold text-foreground">{title}</h2>
+          <p className="mt-1 text-sm leading-5 text-muted-foreground">{description}</p>
         </div>
-      </div>
-      <Separator />
-      <div className="p-5 sm:p-6">{children}</div>
+      </header>
+      <div className="min-w-0 border-t border-border p-4 sm:border-t-0 sm:p-5">{children}</div>
     </section>
   );
 }
@@ -52,28 +52,37 @@ export function SettingsPanel() {
   const locale = useLocale() as AppLocale;
   const translations = useTranslations("Settings");
   const {setTheme, theme} = useTheme();
+  const themeReady = useSyncExternalStore(
+    subscribeToHydration,
+    () => true,
+    () => false,
+  );
 
   return (
-    <div className="grid gap-5">
+    <div className="product-surface overflow-hidden rounded-xl border border-border bg-surface divide-y divide-border">
       <SettingsSection
         description={translations("appearanceDescription")}
         icon={Sun}
         title={translations("appearance")}
       >
-        <div aria-label={translations("theme")} className="grid grid-cols-3 gap-2" role="group">
+        <div
+          aria-label={translations("theme")}
+          className="settings-theme-options grid grid-cols-3 gap-1.5"
+          role="group"
+        >
           {themeOptions.map(({icon: ThemeIcon, label, value}) => {
-            const selected = theme === value;
+            const selected = themeReady && theme === value;
 
             return (
               <Button
                 aria-pressed={selected}
-                className="relative min-w-0 flex-col gap-2 py-3"
+                className="relative min-w-0 justify-start gap-2 ps-2.5 pe-8"
                 key={value}
                 onClick={() => setTheme(value)}
                 variant={selected ? "secondary" : "ghost"}
               >
-                <ThemeIcon aria-hidden="true" className="size-5" />
-                <span>{translations(label)}</span>
+                <ThemeIcon aria-hidden="true" className="size-4 shrink-0" />
+                <span className="truncate">{translations(label)}</span>
                 {selected ? (
                   <Check aria-hidden="true" className="absolute end-2 top-2 size-3.5 text-primary" />
                 ) : null}
@@ -109,12 +118,14 @@ export function SettingsPanel() {
         icon={Type}
         title={translations("typography")}
       >
-        <BidiBlock as="p" className="rounded-xl bg-muted/60 px-4 py-3 leading-8">
-          {translations("technicalSample")}
-        </BidiBlock>
-        <BidiBlock as="p" className="mt-3 rounded-xl bg-muted/60 px-4 py-3 leading-7">
-          Hermes keeps identifiers such as gpt-5.6-sol and /v1/responses unchanged.
-        </BidiBlock>
+        <div className="divide-y divide-border border-y border-border">
+          <BidiBlock as="p" className="py-3 leading-7">
+            {translations("technicalSample")}
+          </BidiBlock>
+          <BidiBlock as="p" className="py-3 leading-6 text-muted-foreground">
+            Hermes keeps identifiers such as gpt-5.6-sol and /v1/responses unchanged.
+          </BidiBlock>
+        </div>
       </SettingsSection>
 
       <SettingsSection

@@ -1,16 +1,15 @@
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ChatHeader } from "./chat-header";
-import { REASONING_EFFORTS, type SessionModelSettings } from "./ui-types";
 
+const setTheme = vi.fn();
 vi.mock("next-themes", () => ({
-  useTheme: () => ({ resolvedTheme: "dark", setTheme: vi.fn() }),
+  useTheme: () => ({ resolvedTheme: "dark", setTheme }),
 }));
 
 const labels = {
-  appName: "Hermes",
   openSessions: "Open sessions",
   openWorkspace: "Open workspace",
   settings: "Settings",
@@ -19,164 +18,95 @@ const labels = {
   reconnecting: "Reconnecting",
   disconnected: "Disconnected",
   unavailable: "Unavailable",
-  model: "Model",
-  profile: "Profile",
-  reasoning: "Reasoning effort",
-  fastMode: "Fast mode",
   theme: "Theme",
   branch: "Branch",
   compress: "Compress",
   recovery: "Recovery",
+  more: "More actions",
+  pinInspector: "Pin inspector",
+  unpinInspector: "Unpin inspector",
 };
 
-const models = [
-  {
-    id: "gpt-5.6-sol",
-    provider: "openai",
-    providerName: "OpenAI",
-    current: true,
-    authenticated: true,
-    supportsReasoning: true,
-  },
-];
-
-function renderHeader(
-  modelSettings: SessionModelSettings,
-  onReasoningChange = vi.fn(),
-) {
-  return render(
-    <ChatHeader
-      locale="en"
-      title="Conversation"
-      connection="connected"
-      models={models}
-      modelSettings={modelSettings}
-      profiles={["default"]}
-      activeProfile="default"
-      capabilities={{
-        gateway: true,
-        sessions: true,
-        models: true,
-        attachments: true,
-        approvals: true,
-        clarification: true,
-        sudo: true,
-        secrets: true,
-        branch: true,
-        compress: true,
-        voice: true,
-        httpFallback: false,
-      }}
-      labels={labels}
-      onOpenSessions={vi.fn()}
-      onOpenArtifacts={vi.fn()}
-      onModelChange={vi.fn()}
-      onProfileChange={vi.fn()}
-      onReasoningChange={onReasoningChange}
-      onBranch={vi.fn()}
-      onCompress={vi.fn()}
-    />,
-  );
+function renderHeader(overrides: Partial<React.ComponentProps<typeof ChatHeader>> = {}) {
+  const props: React.ComponentProps<typeof ChatHeader> = {
+    locale: "en",
+    title: "Conversation",
+    connection: "connected",
+    capabilities: {
+      gateway: true,
+      sessions: true,
+      models: true,
+      attachments: true,
+      approvals: true,
+      clarification: true,
+      sudo: true,
+      secrets: true,
+      branch: true,
+      compress: true,
+      voice: true,
+      httpFallback: false,
+    },
+    labels,
+    onOpenSessions: vi.fn(),
+    onOpenArtifacts: vi.fn(),
+    onBranch: vi.fn(),
+    onCompress: vi.fn(),
+    onRecovery: vi.fn(),
+    onToggleInspectorPin: vi.fn(),
+    ...overrides,
+  };
+  render(<ChatHeader {...props} />);
+  return props;
 }
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.clearAllMocks();
+});
 
-describe("ChatHeader reasoning picker", () => {
-  it("shows every Hermes reasoning effort and selects Ultra", () => {
-    renderHeader({ model: "gpt-5.6-sol", provider: "openai", reasoning: "ultra" });
+describe("compact ChatHeader", () => {
+  it("keeps the primary row focused on title, status, and panel triggers", () => {
+    renderHeader();
 
-    const picker = screen.getByTestId("reasoning-picker");
-    expect(picker).toHaveValue("ultra");
-    expect(picker).toBeEnabled();
-    expect(
-      within(picker).getAllByRole("option").map((option) => option.getAttribute("value")),
-    ).toEqual([...REASONING_EFFORTS]);
+    expect(screen.getByRole("heading", { name: "Conversation" })).toBeInTheDocument();
+    expect(screen.getByTestId("connection-status")).toHaveTextContent("Connected");
+    expect(screen.getByRole("button", { name: "Open sessions" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open workspace" })).toBeInTheDocument();
+    expect(screen.queryByTestId("model-picker")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("reasoning-picker")).not.toBeInTheDocument();
   });
 
-  it("preserves session overrides when the active session changes", () => {
-    const { rerender } = renderHeader({
-      model: "gpt-5.6-sol",
-      provider: "openai",
-      reasoning: "ultra",
-    });
-
-    const props = {
-      locale: "en",
-      title: "Conversation",
-      connection: "connected" as const,
-      models,
-      profiles: ["default"],
-      activeProfile: "default",
-      labels,
-      onOpenSessions: vi.fn(),
-      onOpenArtifacts: vi.fn(),
-      onModelChange: vi.fn(),
-      onProfileChange: vi.fn(),
-      onReasoningChange: vi.fn(),
-      onBranch: vi.fn(),
-      onCompress: vi.fn(),
-    };
-
-    rerender(
-      <ChatHeader
-        {...props}
-        modelSettings={{
-          model: "gpt-5.6-sol",
-          provider: "openai",
-          reasoning: "high",
-        }}
-      />,
-    );
-    expect(screen.getByTestId("reasoning-picker")).toHaveValue("high");
-
-    rerender(
-      <ChatHeader
-        {...props}
-        modelSettings={{
-          model: "gpt-5.6-sol",
-          provider: "openai",
-          reasoning: "none",
-        }}
-      />,
-    );
-    expect(screen.getByTestId("reasoning-picker")).toHaveValue("none");
-    expect(screen.getByTestId("reasoning-picker")).toBeEnabled();
-  });
-
-  it("renders a future Hermes value verbatim instead of falling back to Low", () => {
-    renderHeader({
-      model: "gpt-5.6-sol",
-      provider: "openai",
-      reasoning: "adaptive-v2",
-    });
-
-    const picker = screen.getByTestId("reasoning-picker");
-    expect(picker).toHaveValue("adaptive-v2");
-    const futureOption = within(picker).getByRole("option", { name: "adaptive-v2" });
-    expect(futureOption).toBeInTheDocument();
-    expect((futureOption as HTMLOptionElement).selected).toBe(true);
-  });
-
-  it("is neutral and disabled without an authoritative session value", () => {
-    renderHeader({ model: "gpt-5.6-sol", provider: "openai" });
-
-    const picker = screen.getByTestId("reasoning-picker");
-    expect(picker).toHaveValue("");
-    expect(picker).toBeDisabled();
-    const neutralOption = within(picker).getByRole("option", { name: "—" });
-    expect((neutralOption as HTMLOptionElement).selected).toBe(true);
-  });
-
-  it("sends the selected value through the session-scoped callback", async () => {
+  it("moves branch, compress, recovery, theme, settings, and pinning into overflow", async () => {
     const user = userEvent.setup();
-    const onReasoningChange = vi.fn().mockResolvedValue(undefined);
-    renderHeader(
-      { model: "gpt-5.6-sol", provider: "openai", reasoning: "ultra" },
-      onReasoningChange,
-    );
+    const props = renderHeader();
 
-    await user.selectOptions(screen.getByTestId("reasoning-picker"), "minimal");
-    expect(onReasoningChange).toHaveBeenCalledOnce();
-    expect(onReasoningChange).toHaveBeenCalledWith("minimal");
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    await user.click(screen.getByTestId("header-more-trigger"));
+    const menu = screen.getByRole("menu");
+    expect(menu).toHaveTextContent("Branch");
+    expect(menu).toHaveTextContent("Compress");
+    expect(menu).toHaveTextContent("Recovery");
+    expect(menu).toHaveTextContent("Theme");
+    expect(screen.getByRole("menuitem", { name: "Settings" })).toHaveAttribute("href", "/en/settings");
+
+    await user.click(screen.getByRole("menuitem", { name: "Branch" }));
+    expect(props.onBranch).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId("header-more-trigger"));
+    await user.click(screen.getByRole("menuitemcheckbox", { name: "Pin inspector" }));
+    expect(props.onToggleInspectorPin).toHaveBeenCalledOnce();
+  });
+
+  it("closes overflow with Escape and restores focus to the trigger", async () => {
+    const user = userEvent.setup();
+    renderHeader();
+    const trigger = screen.getByTestId("header-more-trigger");
+    await user.click(trigger);
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    await vi.waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+    await vi.waitFor(() => expect(trigger).toHaveFocus());
   });
 });

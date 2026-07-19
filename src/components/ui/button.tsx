@@ -5,7 +5,7 @@ import type {ButtonHTMLAttributes} from "react";
 import {cn} from "./utils";
 
 export const buttonVariants = cva(
-  "inline-flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-xl border border-transparent px-4 text-sm font-medium transition-colors outline-none select-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-45 motion-reduce:transition-none",
+  "inline-flex min-h-9 shrink-0 items-center justify-center gap-1.5 rounded-lg border border-transparent px-3 text-sm font-medium transition-colors outline-none select-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-45 motion-reduce:transition-none max-[42rem]:min-h-11 max-[42rem]:rounded-xl",
   {
     variants: {
       variant: {
@@ -18,10 +18,10 @@ export const buttonVariants = cva(
           "bg-destructive text-destructive-foreground hover:bg-destructive/90",
       },
       size: {
-        sm: "min-h-9 rounded-lg px-3 text-xs",
-        md: "min-h-11 px-4",
-        lg: "min-h-12 px-5 text-base",
-        icon: "size-11 p-0",
+        sm: "min-h-8 rounded-md px-2.5 text-xs max-[42rem]:min-h-11 max-[42rem]:rounded-lg",
+        md: "min-h-9 px-3",
+        lg: "min-h-10 px-4 text-sm max-[42rem]:min-h-11",
+        icon: "size-9 min-h-9 p-0 max-[42rem]:size-11 max-[42rem]:min-h-11",
       },
     },
     defaultVariants: {
@@ -55,4 +55,3 @@ export function Button({
     />
   );
 }
-

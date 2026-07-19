@@ -122,9 +122,10 @@ export function Transcript({
     getScrollElement: () => viewportRef.current,
     estimateSize: (index) => {
       const item = items[index];
-      if (item?.kind === "message") return Math.max(110, Math.min(420, item.message.content.length * 0.32));
-      if (item?.kind === "reasoning") return Math.max(70, Math.min(220, item.reasoning.content.length * 0.18));
-      return 180;
+      if (item?.kind === "message") return Math.max(72, Math.min(380, item.message.content.length * 0.28));
+      if (item?.kind === "reasoning") return Math.max(56, Math.min(200, item.reasoning.content.length * 0.16));
+      if (item?.kind === "tool") return 84;
+      return 156;
     },
     overscan: 7,
     getItemKey: (index) => items[index]?.key ?? index,
@@ -491,7 +492,7 @@ function MessageBubble({
 
   return (
     <article
-      className={`message message--${message.role} message--${message.status ?? "complete"}`}
+      className={`message message--${message.role} message--${message.status ?? "complete"} ${message.role === "user" ? "message--bubble" : "message--flat"}`}
       data-testid="message"
       data-role={message.role}
       data-status={message.status ?? "complete"}
@@ -548,6 +549,8 @@ function MessageBubble({
           <button
             type="button"
             className="message-copy"
+            aria-label={labels.edit}
+            title={labels.edit}
             onClick={() => {
               setEditValue(message.rawSource);
               setEditing(true);
@@ -558,7 +561,13 @@ function MessageBubble({
           </button>
         ) : null}
         {canRewind && message.role === "assistant" && message.status !== "streaming" && onRegenerate ? (
-          <button type="button" className="message-copy" onClick={() => void onRegenerate(message)}>
+          <button
+            type="button"
+            className="message-copy"
+            aria-label={labels.regenerate}
+            title={labels.regenerate}
+            onClick={() => void onRegenerate(message)}
+          >
             <RefreshCw aria-hidden="true" size={15} />
             {labels.regenerate}
           </button>

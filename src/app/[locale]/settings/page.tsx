@@ -1,10 +1,8 @@
-import {ArrowLeft} from "lucide-react";
+import {Settings} from "lucide-react";
 import type {Metadata} from "next";
 import {getTranslations, setRequestLocale} from "next-intl/server";
 import {notFound} from "next/navigation";
 
-import {Button} from "@/components/ui/button";
-import {Link} from "@/i18n/navigation";
 import {routing, type AppLocale} from "@/i18n/routing";
 
 import {SettingsPanel} from "./settings-panel";
@@ -37,28 +35,24 @@ export default async function SettingsPage({params}: SettingsPageProps) {
 
   setRequestLocale(requestedLocale);
   const translations = await getTranslations("Settings");
-  const navTranslations = await getTranslations("Nav");
   return (
     <main
-      className="min-h-dvh bg-background px-4 py-6 text-foreground sm:px-8 sm:py-10"
+      className="product-page min-h-full bg-background px-4 pb-8 text-foreground sm:px-6"
       id="main-content"
     >
-      <div className="mx-auto w-full max-w-3xl">
-        <Button asChild className="mb-8 -ms-2" size="sm" variant="ghost">
-          <Link href="/">
-            <ArrowLeft aria-hidden="true" className="size-4 rtl-mirror" />
-            {navTranslations("backToChat")}
-          </Link>
-        </Button>
-
-        <header className="mb-8 max-w-2xl">
-          <h1 className="text-balance text-3xl font-semibold tracking-tight sm:text-4xl">
+      <div className="product-page-content mx-auto w-full max-w-[70rem]">
+        <header className="product-page-header flex min-h-12 items-center gap-3 border-b border-border">
+          <Settings aria-hidden="true" className="size-5 shrink-0 text-primary" />
+          <h1 className="min-w-0 flex-1 truncate text-lg font-semibold tracking-tight">
             {translations("title")}
           </h1>
-          <p className="mt-3 text-pretty text-base leading-8 text-muted-foreground">
+        </header>
+
+        <div className="product-page-intro py-4">
+          <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
             {translations("description")}
           </p>
-        </header>
+        </div>
 
         <SettingsPanel />
       </div>

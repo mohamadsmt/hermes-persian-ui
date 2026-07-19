@@ -20,7 +20,7 @@ export function Tooltip({children, content, side = "top"}: TooltipProps) {
       <TooltipPrimitive.Portal>
         <TooltipPrimitive.Content
           className={cn(
-            "z-50 max-w-72 rounded-lg border border-border bg-popover px-3 py-2 text-xs text-popover-foreground shadow-lg",
+            "z-50 max-w-72 rounded-md border border-border bg-popover px-2.5 py-1.5 text-xs text-popover-foreground shadow-lg",
             "data-[state=delayed-open]:animate-in data-[state=closed]:animate-out motion-reduce:animate-none",
           )}
           side={side}
@@ -33,4 +33,3 @@ export function Tooltip({children, content, side = "top"}: TooltipProps) {
     </TooltipPrimitive.Root>
   );
 }
-

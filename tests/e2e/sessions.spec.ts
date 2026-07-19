@@ -58,10 +58,10 @@ test("does not offer deletion for a session active in another runtime", async ({
   await expect(current.getByTestId("delete-session")).toBeVisible();
 });
 
-test("model changes are scoped to one session", async ({ app, page }, testInfo) => {
-  test.skip(testInfo.project.name === "mobile", "model picker is intentionally desktop-only");
+test("model changes are scoped to one session", async ({ app, page }) => {
   await app.open();
   await app.ensureSession();
+  await app.openComposerSettings();
 
   const picker = page.getByTestId("model-picker");
   await expect(picker).toHaveValue("openai-codex:gpt-5.6-sol");
@@ -75,18 +75,20 @@ test("model changes are scoped to one session", async ({ app, page }, testInfo) 
   await expect(picker).toHaveValue("anthropic:claude-sonnet-4.6");
 
   await app.createSession();
+  await app.openComposerSettings();
   await expect(page.getByTestId("model-picker")).toHaveValue("openai-codex:gpt-5.6-sol");
 });
 
 test("reasoning inherits Ultra and preserves a per-session High override", async ({
   app,
   page,
-}, testInfo) => {
-  test.skip(testInfo.project.name === "mobile", "reasoning picker is intentionally desktop-only");
+}) => {
   await app.open();
+  await app.openComposerSettings();
   await expect(page.getByTestId("reasoning-picker")).toHaveValue("");
   await expect(page.getByTestId("reasoning-picker")).toBeDisabled();
   await app.ensureSession();
+  await app.openComposerSettings();
   const firstStoredId = new URL(page.url()).pathname.split("/").at(-1);
   expect(firstStoredId).toBeTruthy();
 
@@ -96,6 +98,7 @@ test("reasoning inherits Ultra and preserves a per-session High override", async
   await expect(picker).toHaveValue("high");
 
   await app.createSession();
+  await app.openComposerSettings();
   await expect(page.getByTestId("reasoning-picker")).toHaveValue("ultra");
 
   await app.openSessionRail();
@@ -103,6 +106,7 @@ test("reasoning inherits Ultra and preserves a per-session High override", async
     `[data-testid="session-item"][data-session-id="${firstStoredId}"] .session-row__main`,
   ).click();
   await expect(page).toHaveURL(new RegExp(`/(?:fa|en)/c/${firstStoredId}\\?profile=default$`, "u"));
+  await app.openComposerSettings();
   await expect(page.getByTestId("reasoning-picker")).toHaveValue("high");
 });
 
@@ -115,6 +119,7 @@ test("renames, searches, and explicitly confirms deletion", async ({ app, page }
     `[data-testid="session-item"][data-session-id="${storedId}"]`,
   );
 
+  await session.hover();
   await session.getByTestId("session-actions").click();
   await session.getByTestId("rename-session").click();
   const title = page.getByTestId("session-title");
@@ -125,7 +130,9 @@ test("renames, searches, and explicitly confirms deletion", async ({ app, page }
   await page.getByTestId("session-search").fill("پایدار");
   await expect(page.locator('[data-testid="session-item"]:visible')).toHaveCount(1);
   await page.getByTestId("session-search").fill("");
+  await expect(session).toBeVisible();
 
+  await session.hover();
   await session.getByTestId("session-actions").click();
   await session.getByTestId("delete-session").click();
   await expect(page.getByRole("alertdialog")).toBeVisible();

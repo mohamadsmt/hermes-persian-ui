@@ -17,7 +17,16 @@
     "openWorkspace": "Open workspace",
     "closePanel": "Close panel",
     "collapseSidebar": "Collapse sidebar",
-    "expandSidebar": "Expand sidebar"
+    "expandSidebar": "Expand sidebar",
+    "openNavigation": "Open navigation",
+    "closeNavigation": "Close navigation",
+    "navigationMenu": "Navigation",
+    "openInspector": "Open inspector",
+    "closeInspector": "Close inspector",
+    "pinInspector": "Pin inspector",
+    "unpinInspector": "Unpin inspector",
+    "openModelSettings": "Open model settings",
+    "moreActions": "More actions"
   },
   "Sessions": {
     "title": "Conversations",

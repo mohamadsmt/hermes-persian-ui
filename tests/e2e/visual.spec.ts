@@ -9,12 +9,13 @@ import {
 
 const FIXED_VISUAL_TIME = new Date("2026-07-13T13:30:00.000Z");
 
-type WorkspaceModule = "activity" | "automations" | "knowledge";
+type WorkspaceModule = "activity" | "automations" | "knowledge" | "settings";
 
 const WORKSPACE_MODULE_TITLES = {
   activity: {en: "Activity", fa: "فعالیت‌ها"},
   automations: {en: "Automations", fa: "خودکارسازی‌ها"},
   knowledge: {en: "Knowledge", fa: "دانش"},
+  settings: {en: "Settings", fa: "تنظیمات"},
 } as const;
 
 async function settleVisualPage(page: Page): Promise<void> {
@@ -40,6 +41,13 @@ async function openWorkspaceModule(
   locale: "en" | "fa",
   workspaceModule: WorkspaceModule,
 ): Promise<void> {
+  const mobileTrigger = page.locator(".workspace-nav__mobile-trigger");
+  if (await mobileTrigger.isVisible()) {
+    if ((await mobileTrigger.getAttribute("aria-expanded")) !== "true") {
+      await mobileTrigger.click();
+    }
+    await expect(mobileTrigger).toHaveAttribute("aria-expanded", "true");
+  }
   await page.locator(`a[href="/${locale}/${workspaceModule}"]`).click();
   await expect(page).toHaveURL(new RegExp(`/${locale}/${workspaceModule}/?$`, "u"));
   await expect(
@@ -122,6 +130,21 @@ async function prepareWorkspaceKnowledge(
   await expect(page.getByText("memory-test", {exact: true})).toBeVisible();
 }
 
+async function prepareWorkspaceSettings(
+  page: Page,
+  app: HermesApp,
+  locale: "en" | "fa",
+): Promise<void> {
+  await app.open(locale);
+  await openWorkspaceModule(page, locale, "settings");
+  await expect(
+    page.getByRole("heading", {
+      name: locale === "fa" ? "ظاهر" : "Appearance",
+      level: 2,
+    }),
+  ).toBeVisible();
+}
+
 async function waitForSyntaxHighlight(page: Page): Promise<void> {
   await expect
     .poll(
@@ -200,6 +223,7 @@ test("desktop RTL dark tool and approval states @visual", async ({ app, page }, 
   test.skip(testInfo.project.name !== "chromium", "desktop baseline");
   await page.clock.setFixedTime(FIXED_VISUAL_TIME);
   await app.open();
+  await page.getByTestId("header-more-trigger").click();
   await page.getByTestId("theme-toggle").click();
   await expect(page.locator("html")).toHaveClass(/dark/u);
   await app.sendScenario("tool");
@@ -263,7 +287,49 @@ test("mobile RTL composer and technical content @visual", async ({ app, page }, 
   });
 });
 
-for (const workspaceModule of ["activity", "automations", "knowledge"] as const) {
+test("tablet RTL empty chat with conversation drawer @visual", async ({ app, page }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium", "tablet baseline");
+  await page.setViewportSize({ width: 820, height: 900 });
+  await page.clock.setFixedTime(FIXED_VISUAL_TIME);
+  await app.open("fa");
+  await app.ensureSession();
+  await app.openSessionRail();
+  await app.expectNoPageOverflow();
+  await settleVisualPage(page);
+  await expect(page).toHaveScreenshot("tablet-820x900-rtl-session-drawer.png", {
+    animations: "disabled",
+    caret: "hide",
+    fullPage: true,
+  });
+});
+
+test("wide RTL pinned artifact inspector @visual", async ({ app, page }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium", "wide desktop baseline");
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.clock.setFixedTime(FIXED_VISUAL_TIME);
+  await app.open("fa");
+  await app.sendScenario("toolRunningArtifact");
+  await expect(page.getByTestId("artifact-rail")).toBeVisible();
+  await page.getByTestId("artifact-rail").getByRole("button", {
+    name: /سنجاق‌کردن پنل جزئیات|Pin inspector/iu,
+  }).click();
+  await expect(app.shell).toHaveAttribute("data-inspector-pinned", "true");
+  await waitForSyntaxHighlight(page);
+  await app.expectNoPageOverflow();
+  await settleVisualPage(page);
+  try {
+    await expect(page).toHaveScreenshot("wide-1440x900-rtl-pinned-inspector.png", {
+      animations: "disabled",
+      caret: "hide",
+      fullPage: true,
+    });
+  } finally {
+    const stop = page.getByTestId("stop-run");
+    if (await stop.isVisible()) await stop.click();
+  }
+});
+
+for (const workspaceModule of ["activity", "automations", "knowledge", "settings"] as const) {
   test(`desktop Persian ${workspaceModule} workspace @visual`, async ({app, page}, testInfo) => {
     test.skip(testInfo.project.name !== "chromium", "desktop workspace baseline");
     await page.clock.setFixedTime(FIXED_VISUAL_TIME);
@@ -271,6 +337,7 @@ for (const workspaceModule of ["activity", "automations", "knowledge"] as const)
     if (workspaceModule === "activity") await prepareWorkspaceActivity(page, app, "fa");
     if (workspaceModule === "automations") await prepareWorkspaceAutomations(page, app, "fa");
     if (workspaceModule === "knowledge") await prepareWorkspaceKnowledge(page, app, "fa");
+    if (workspaceModule === "settings") await prepareWorkspaceSettings(page, app, "fa");
 
     await app.expectNoPageOverflow();
     await settleVisualPage(page);
@@ -288,6 +355,7 @@ for (const workspaceModule of ["activity", "automations", "knowledge"] as const)
     if (workspaceModule === "activity") await prepareWorkspaceActivity(page, app, "en");
     if (workspaceModule === "automations") await prepareWorkspaceAutomations(page, app, "en");
     if (workspaceModule === "knowledge") await prepareWorkspaceKnowledge(page, app, "en");
+    if (workspaceModule === "settings") await prepareWorkspaceSettings(page, app, "en");
 
     await app.expectNoPageOverflow();
     await settleVisualPage(page);

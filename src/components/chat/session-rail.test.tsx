@@ -26,6 +26,8 @@ const labels = {
   statusWorking: "Conversation is working",
   statusUnread: "Conversation completed with unread updates",
   statusIdle: "Conversation is ready",
+  collapse: "Collapse sidebar",
+  expand: "Expand sidebar",
 };
 
 const sessions = [
@@ -36,6 +38,36 @@ const sessions = [
 afterEach(cleanup);
 
 describe("session capability controls", () => {
+  it("renders a selectable icon rail and exposes a controlled collapse toggle", async () => {
+    const user = userEvent.setup();
+    const onSelect = vi.fn();
+    const onToggleCollapsed = vi.fn();
+    render(
+      <SessionRail
+        sessions={sessions}
+        activeSessionId="active"
+        locale="en"
+        labels={labels}
+        collapsed
+        onToggleCollapsed={onToggleCollapsed}
+        onCreate={vi.fn()}
+        onSelect={onSelect}
+        onRename={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId("session-list")).toHaveAttribute("data-collapsed", "true");
+    expect(screen.queryByTestId("session-search")).not.toBeInTheDocument();
+    expect(screen.getByTestId("new-session")).toHaveAccessibleName("New");
+    expect(screen.getByRole("button", { name: "Active" })).toHaveAttribute("aria-current", "page");
+
+    await user.click(screen.getByRole("button", { name: "Idle" }));
+    expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ storedId: "idle" }));
+    await user.click(screen.getByTestId("session-rail-toggle"));
+    expect(onToggleCollapsed).toHaveBeenCalledOnce();
+  });
+
   it("renders the highest-priority state with a distinct accessible indicator", () => {
     const stateSessions: SessionSummary[] = [
       {

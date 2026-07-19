@@ -73,7 +73,7 @@ export function ToolCard({ tool, labels, onExpandedChange }: ToolCardProps) {
 
   return (
     <article
-      className="tool-card"
+      className={`tool-card ${tool.status === "failed" ? "tool-card--prominent" : "tool-card--disclosure"}`}
       data-testid="tool-card"
       data-status={tool.status}
       aria-busy={tool.status === "running"}
@@ -89,7 +89,7 @@ export function ToolCard({ tool, labels, onExpandedChange }: ToolCardProps) {
           <Icon
             aria-hidden="true"
             className={tool.status === "running" ? "spin" : undefined}
-            size={18}
+            size={16}
           />
           <bdi dir="ltr" className="technical-inline">
             {tool.name}

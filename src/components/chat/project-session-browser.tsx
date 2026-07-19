@@ -192,16 +192,16 @@ export function ProjectSessionBrowser({
   return (
     <nav
       aria-label={copy.projects}
-      className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2 overflow-hidden"
+      className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-1.5 overflow-hidden"
       data-testid="project-browser"
     >
       {groups.map((project) => (
         <details
-          className="min-w-0 max-w-full overflow-hidden rounded-xl border border-border bg-surface"
+          className="min-w-0 max-w-full overflow-hidden rounded-lg border border-border/70 bg-transparent"
           key={project.id}
           open
         >
-          <summary className="flex min-h-11 min-w-0 cursor-pointer list-none items-center gap-2 px-3 py-2 marker:hidden">
+          <summary className="flex min-h-11 min-w-0 cursor-pointer list-none items-center gap-2 px-2 py-1.5 marker:hidden sm:min-h-9">
             <FolderGit2 aria-hidden="true" className="text-primary" size={17} />
             <span className="w-0 min-w-0 flex-1 overflow-hidden">
               <bdi
@@ -226,12 +226,12 @@ export function ProjectSessionBrowser({
             ) : null}
           </summary>
           {project.path ? (
-            <bdi className="block w-full min-w-0 truncate border-t border-border px-3 py-1.5 text-[0.6875rem] text-muted-foreground" dir="ltr">
+            <bdi className="block w-full min-w-0 truncate border-t border-border/70 px-2 py-1 text-[0.6875rem] text-muted-foreground" dir="ltr">
               {project.path}
             </bdi>
           ) : null}
 
-          <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-3 border-t border-border p-2">
+          <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2 border-t border-border/70 p-1.5">
             {project.repositories.map((repository) => (
               <section
                 aria-label={`${copy.repository}: ${repository.name}`}
@@ -258,7 +258,7 @@ export function ProjectSessionBrowser({
                         return (
                           <button
                             aria-current={active ? "page" : undefined}
-                            className={`flex min-h-11 w-full min-w-0 max-w-full items-center gap-2 overflow-hidden rounded-lg px-2 py-1.5 text-start text-sm hover:bg-muted ${active ? "bg-primary/10 text-primary" : ""}`}
+                            className={`flex min-h-11 w-full min-w-0 max-w-full items-center gap-2 overflow-hidden rounded-md px-2 py-1 text-start text-sm hover:bg-muted sm:min-h-9 ${active ? "bg-primary/10 text-primary" : ""}`}
                             data-session-id={session.id}
                             key={session.id}
                             onClick={() => onSelectSession(session.id)}

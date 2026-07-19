@@ -12,6 +12,8 @@ import {
   Paperclip,
   PanelLeftClose,
   PanelsTopLeft,
+  Pin,
+  PinOff,
   RefreshCw,
   X,
 } from "lucide-react";
@@ -24,6 +26,7 @@ export interface WorkspaceFilesRailProps {
   labels?: Partial<WorkspaceFilesLabels>;
   locale: string;
   mobileOpen?: boolean;
+  inspectorPinned?: boolean;
   onAttach?: (entry: WorkspaceEntry) => void | Promise<void>;
   onCapabilityChange?: (
     operation: "list" | "read" | "validate",
@@ -32,11 +35,14 @@ export interface WorkspaceFilesRailProps {
   artifactCount?: number;
   onClose: () => void;
   onOpenArtifacts?: () => void;
+  onToggleInspectorPin?: () => void;
   open: boolean;
   profile: string;
   sessionId?: string;
   width?: number;
   refreshKey?: number;
+  pinLabel?: string;
+  unpinLabel?: string;
 }
 
 export interface WorkspaceFilesLabels {
@@ -93,16 +99,20 @@ export function WorkspaceFilesRail({
   labels: labelOverrides,
   locale,
   mobileOpen = false,
+  inspectorPinned = false,
   onAttach,
   onCapabilityChange,
   artifactCount = 0,
   onClose,
   onOpenArtifacts,
+  onToggleInspectorPin,
   open,
   profile,
   sessionId,
   width = 352,
   refreshKey = 0,
+  pinLabel = "Pin inspector",
+  unpinLabel = "Unpin inspector",
 }: WorkspaceFilesRailProps) {
   const labels = workspaceLabels(locale, labelOverrides);
   const concreteProfile = profile.trim();
@@ -233,21 +243,34 @@ export function WorkspaceFilesRail({
           <FolderOpen aria-hidden="true" size={17} />
           {labels.title}
         </h2>
-        {onOpenArtifacts && artifactCount > 0 ? (
-          <button
-            aria-label={`${artifactCount.toLocaleString(locale)} artifacts`}
-            className="icon-button"
-            onClick={onOpenArtifacts}
-            type="button"
-          >
-            <PanelsTopLeft aria-hidden="true" size={18} />
-            <span className="sr-only">{artifactCount.toLocaleString(locale)}</span>
+        <div className="artifact-rail__actions">
+          {onOpenArtifacts && artifactCount > 0 ? (
+            <button
+              aria-label={`${artifactCount.toLocaleString(locale)} artifacts`}
+              className="icon-button"
+              onClick={onOpenArtifacts}
+              type="button"
+            >
+              <PanelsTopLeft aria-hidden="true" size={18} />
+              <span className="sr-only">{artifactCount.toLocaleString(locale)}</span>
+            </button>
+          ) : null}
+          {onToggleInspectorPin ? (
+            <button
+              aria-label={inspectorPinned ? unpinLabel : pinLabel}
+              aria-pressed={inspectorPinned}
+              className="icon-button header-wide-action"
+              onClick={onToggleInspectorPin}
+              type="button"
+            >
+              {inspectorPinned ? <PinOff aria-hidden="true" size={17} /> : <Pin aria-hidden="true" size={17} />}
+            </button>
+          ) : null}
+          <button aria-label={labels.close} className="icon-button" onClick={onClose} type="button">
+            <PanelLeftClose aria-hidden="true" className="header-wide-action" size={19} />
+            <X aria-hidden="true" className="header-mobile-action" size={20} />
           </button>
-        ) : null}
-        <button aria-label={labels.close} className="icon-button" onClick={onClose} type="button">
-          <PanelLeftClose aria-hidden="true" className="header-wide-action" size={19} />
-          <X aria-hidden="true" className="header-mobile-action" size={20} />
-        </button>
+        </div>
       </header>
 
       {!canBrowse ? (

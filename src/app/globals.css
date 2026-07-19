@@ -7,51 +7,64 @@
 
 :root {
   color-scheme: light;
-  --background: oklch(0.982 0.003 270);
+  --background: oklch(0.978 0.002 270);
   --foreground: oklch(0.205 0.012 270);
-  --surface: oklch(0.997 0.002 270);
+  --surface: oklch(0.991 0.002 270);
   --surface-raised: oklch(1 0 0);
   --card: var(--surface);
   --card-foreground: var(--foreground);
   --popover: oklch(1 0 0);
   --popover-foreground: var(--foreground);
-  --primary: oklch(0.52 0.17 275);
+  --primary: oklch(0.495 0.17 275);
   --primary-foreground: oklch(0.99 0.005 270);
-  --muted: oklch(0.945 0.007 270);
-  --muted-foreground: oklch(0.45 0.018 270);
-  --border: oklch(0.89 0.009 270);
-  --input: oklch(0.89 0.009 270);
+  --muted: oklch(0.948 0.004 270);
+  --muted-foreground: oklch(0.44 0.014 270);
+  --border: oklch(0.89 0.006 270 / 0.78);
+  --input: oklch(0.86 0.008 270);
   --ring: oklch(0.58 0.17 275);
-  --sidebar: oklch(0.962 0.006 270);
+  --sidebar: oklch(0.958 0.004 270);
   --sidebar-foreground: var(--foreground);
   --success: oklch(0.49 0.13 155);
   --warning: oklch(0.71 0.14 76);
   --warning-foreground: oklch(0.39 0.09 62);
   --destructive: oklch(0.55 0.2 25);
   --destructive-foreground: oklch(0.99 0.005 25);
-  --radius: 0.75rem;
-  --shadow-surface: 0 1px 2px oklch(0.2 0.02 270 / 0.04),
-    0 8px 24px oklch(0.2 0.02 270 / 0.035);
+  --radius: 0.5rem;
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --control-compact: 2rem;
+  --control-default: 2.25rem;
+  --header-height: 3rem;
+  --workspace-rail-width: 3.25rem;
+  --session-rail-width: 16.5rem;
+  --session-rail-collapsed-width: 3.25rem;
+  --inspector-width: 20rem;
+  --content-chat-max: 51.25rem;
+  --content-page-max: 70rem;
+  --shadow-surface: 0 1px 2px oklch(0.2 0.02 270 / 0.035),
+    0 10px 28px oklch(0.2 0.02 270 / 0.04);
 }
 
 .dark {
   color-scheme: dark;
   --background: oklch(0.165 0.012 270);
   --foreground: oklch(0.93 0.008 270);
-  --surface: oklch(0.205 0.014 270);
-  --surface-raised: oklch(0.235 0.015 270);
+  --surface: oklch(0.198 0.012 270);
+  --surface-raised: oklch(0.225 0.013 270);
   --card: var(--surface);
   --card-foreground: var(--foreground);
   --popover: oklch(0.235 0.015 270);
   --popover-foreground: var(--foreground);
   --primary: oklch(0.7 0.145 275);
   --primary-foreground: oklch(0.17 0.02 275);
-  --muted: oklch(0.26 0.014 270);
+  --muted: oklch(0.255 0.012 270);
   --muted-foreground: oklch(0.72 0.014 270);
-  --border: oklch(0.32 0.014 270);
+  --border: oklch(0.34 0.012 270 / 0.76);
   --input: oklch(0.34 0.014 270);
   --ring: oklch(0.7 0.145 275);
-  --sidebar: oklch(0.185 0.012 270);
+  --sidebar: oklch(0.178 0.01 270);
   --sidebar-foreground: var(--foreground);
   --success: oklch(0.7 0.14 155);
   --warning: oklch(0.76 0.14 76);
@@ -113,13 +126,13 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: "Inter Variable", "Vazirmatn Variable", ui-sans-serif, system-ui, sans-serif;
-  font-size: 1rem;
+  font-size: 0.875rem;
   font-weight: 450;
-  line-height: 1.65;
+  line-height: 1.6;
 }
 
 html[lang="fa"] body {
-  line-height: 1.75;
+  line-height: 1.7;
 }
 
 button,
@@ -199,8 +212,8 @@ samp {
 .markdown-content {
   min-width: 0;
   color: inherit;
-  font-size: 0.9875rem;
-  line-height: 1.8;
+  font-size: 0.9rem;
+  line-height: 1.75;
 }
 
 .markdown-content > :first-child {
@@ -344,18 +357,20 @@ samp {
 /* Application shell ------------------------------------------------------ */
 
 .app-shell {
+  --session-column: var(--session-rail-width);
+
   display: grid;
   inline-size: 100%;
   block-size: 100dvh;
   min-inline-size: 0;
-  grid-template-columns: 18.5rem minmax(0, 1fr) auto;
+  grid-template-columns: var(--session-column) minmax(0, 1fr);
   overflow: hidden;
   background: var(--background);
   isolation: isolate;
 }
 
 .chat-main {
-  --composer-block-size: 7.75rem;
+  --composer-block-size: 6rem;
 
   position: relative;
   display: flex;
@@ -439,9 +454,9 @@ samp {
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
-  min-block-size: 2.75rem;
+  min-block-size: var(--control-default);
   border: 1px solid transparent;
-  border-radius: 0.75rem;
+  border-radius: 0.5rem;
   font-size: 0.875rem;
   font-weight: 600;
   line-height: 1;
@@ -455,8 +470,8 @@ samp {
 }
 
 .button {
-  padding-block: 0.7rem;
-  padding-inline: 1rem;
+  padding-block: 0.45rem;
+  padding-inline: 0.75rem;
 }
 
 .button--primary {
@@ -505,7 +520,7 @@ samp {
 }
 
 .icon-button {
-  inline-size: 2.75rem;
+  inline-size: var(--control-default);
   padding: 0;
   background: transparent;
   color: var(--muted-foreground);
@@ -536,7 +551,7 @@ samp {
 .session-rail {
   z-index: 30;
   display: flex;
-  inline-size: 18.5rem;
+  inline-size: var(--session-rail-width);
   min-inline-size: 0;
   block-size: 100dvh;
   flex-direction: column;
@@ -546,11 +561,75 @@ samp {
   color: var(--sidebar-foreground);
 }
 
+.app-shell--session-collapsed,
+.app-shell[data-session-rail-collapsed="true"] {
+  --session-column: var(--session-rail-collapsed-width);
+}
+
+.session-rail--collapsed {
+  inline-size: var(--session-rail-collapsed-width);
+}
+
+.session-rail--collapsed .rail-header {
+  justify-items: center;
+  padding-inline: 0.375rem;
+}
+
+.session-rail--collapsed .rail-title-row {
+  justify-content: center;
+}
+
+.rail-collapse-toggle,
+.rail-new-compact,
+.session-compact-button {
+  inline-size: 2.25rem;
+  min-block-size: 2.25rem;
+}
+
+.session-rail__compact-list {
+  display: grid;
+  justify-items: center;
+  gap: 0.25rem;
+}
+
+.session-compact-button {
+  display: grid;
+  place-items: center;
+  border-radius: 0.5rem;
+  color: var(--muted-foreground);
+}
+
+.session-compact-button:hover,
+.session-compact-button:focus-visible,
+.session-compact-button--active {
+  background: var(--muted);
+  color: var(--foreground);
+}
+
+.session-compact-button--active {
+  box-shadow: inset 2px 0 0 var(--primary);
+}
+
+[dir="rtl"] .session-compact-button--active {
+  box-shadow: inset -2px 0 0 var(--primary);
+}
+
+.session-skeleton--compact {
+  inline-size: 2.25rem;
+  block-size: 2.25rem;
+  margin-inline: auto;
+}
+
+.rail-empty--compact {
+  min-block-size: 4rem;
+  padding: 0.5rem;
+}
+
 .rail-header {
   display: grid;
-  gap: 0.875rem;
-  padding-block: 1rem;
-  padding-inline: 1rem;
+  gap: 0.5rem;
+  padding-block: 0.5rem;
+  padding-inline: 0.5rem;
   border-block-end: 1px solid var(--border);
 }
 
@@ -559,12 +638,12 @@ samp {
   min-block-size: 2.25rem;
   align-items: center;
   justify-content: space-between;
-  gap: 0.75rem;
+  gap: 0.5rem;
 }
 
 .rail-title-row h2 {
-  font-size: 0.9375rem;
-  font-weight: 700;
+  font-size: 0.875rem;
+  font-weight: 650;
   letter-spacing: -0.01em;
 }
 
@@ -574,13 +653,13 @@ samp {
 
 .session-search {
   display: flex;
-  min-block-size: 2.75rem;
+  min-block-size: var(--control-default);
   align-items: center;
   gap: 0.625rem;
   border: 1px solid var(--border);
-  border-radius: 0.75rem;
+  border-radius: 0.5rem;
   background: var(--surface);
-  padding-inline: 0.75rem;
+  padding-inline: 0.625rem;
   color: var(--muted-foreground);
   transition: border-color 140ms ease, box-shadow 140ms ease;
 }
@@ -606,8 +685,8 @@ samp {
   flex: 1;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding-block: 0.625rem 1rem;
-  padding-inline: 0.625rem;
+  padding-block: 0.375rem 0.75rem;
+  padding-inline: 0.375rem;
 }
 
 .session-row {
@@ -616,7 +695,7 @@ samp {
   align-items: center;
   gap: 0.25rem;
   margin-block: 0.125rem;
-  border-radius: 0.75rem;
+  border-radius: 0.5rem;
 }
 
 .session-row:hover,
@@ -625,22 +704,23 @@ samp {
 }
 
 .session-row--active {
-  background: color-mix(in oklab, var(--primary) 11%, var(--surface));
-  box-shadow: inset 3px 0 0 var(--primary);
+  background: color-mix(in oklab, var(--primary) 10%, var(--surface));
+  box-shadow: inset 2px 0 0 var(--primary);
 }
 
 [dir="rtl"] .session-row--active {
-  box-shadow: inset -3px 0 0 var(--primary);
+  box-shadow: inset -2px 0 0 var(--primary);
 }
 
 .session-row__main {
   display: grid;
   min-inline-size: 0;
   flex: 1;
-  gap: 0.25rem;
+  min-block-size: 2.5rem;
+  gap: 0.125rem;
   border-radius: inherit;
-  padding-block: 0.7rem;
-  padding-inline: 0.75rem 0.25rem;
+  padding-block: 0.375rem;
+  padding-inline: 0.625rem 0.25rem;
   text-align: start;
   cursor: pointer;
 }
@@ -664,8 +744,8 @@ samp {
 }
 
 .session-row__actions {
-  inline-size: 2.25rem;
-  min-block-size: 2.25rem;
+  inline-size: 2rem;
+  min-block-size: 2rem;
   opacity: 0;
 }
 
@@ -683,7 +763,7 @@ samp {
   min-inline-size: 10rem;
   gap: 0.125rem;
   border: 1px solid var(--border);
-  border-radius: 0.75rem;
+  border-radius: 0.5rem;
   background: var(--popover);
   padding: 0.35rem;
   box-shadow: var(--shadow-surface);
@@ -691,7 +771,7 @@ samp {
 
 .session-menu button {
   display: flex;
-  min-block-size: 2.5rem;
+  min-block-size: 2.25rem;
   align-items: center;
   gap: 0.625rem;
   border-radius: 0.5rem;
@@ -705,9 +785,9 @@ samp {
 }
 
 .session-skeleton {
-  block-size: 3.75rem;
+  block-size: 2.5rem;
   margin-block: 0.25rem;
-  border-radius: 0.75rem;
+  border-radius: 0.5rem;
   background: linear-gradient(
     100deg,
     color-mix(in oklab, var(--muted) 70%, transparent) 30%,
@@ -737,14 +817,15 @@ samp {
   z-index: 25;
   display: flex;
   min-inline-size: 0;
-  min-block-size: 4rem;
+  min-block-size: var(--header-height);
+  block-size: var(--header-height);
   align-items: center;
   justify-content: space-between;
-  gap: 1rem;
+  gap: 0.5rem;
   border-block-end: 1px solid var(--border);
   background: color-mix(in oklab, var(--background) 92%, transparent);
-  padding-block: 0.5rem;
-  padding-inline: 1rem;
+  padding-block: 0.375rem;
+  padding-inline: 0.625rem;
   backdrop-filter: blur(12px);
 }
 
@@ -756,11 +837,59 @@ samp {
 }
 
 .chat-header__identity {
-  gap: 0.625rem;
+  gap: 0.5rem;
+}
+
+.chat-header__identity .chat-header__panel-trigger {
+  display: none;
 }
 
 .chat-header__controls {
   gap: 0.25rem;
+}
+
+.header-more,
+.composer-settings {
+  position: relative;
+}
+
+.header-more__menu,
+.composer-settings__menu {
+  position: absolute;
+  z-index: 60;
+  display: grid;
+  min-inline-size: 12.5rem;
+  gap: 0.125rem;
+  border: 1px solid var(--border);
+  border-radius: 0.625rem;
+  background: var(--popover);
+  padding: 0.25rem;
+  color: var(--popover-foreground);
+  box-shadow: var(--shadow-surface);
+}
+
+.header-more__menu {
+  inset-block-start: calc(100% + 0.375rem);
+  inset-inline-end: 0;
+}
+
+.header-more__menu :is(button, a) {
+  display: flex;
+  min-block-size: 2.25rem;
+  align-items: center;
+  gap: 0.625rem;
+  border-radius: 0.375rem;
+  padding-inline: 0.625rem;
+  color: var(--foreground);
+  font-size: 0.8125rem;
+  text-align: start;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.header-more__menu :is(button, a):hover,
+.header-more__menu :is(button, a):focus-visible {
+  background: var(--muted);
 }
 
 .app-mark {
@@ -770,13 +899,13 @@ samp {
   flex: none;
   place-items: center;
   border: 1px solid color-mix(in oklab, var(--primary) 24%, var(--border));
-  border-radius: 0.75rem;
+  border-radius: 0.5rem;
   background: color-mix(in oklab, var(--primary) 10%, var(--surface));
   color: var(--primary);
 }
 
 .chat-header__brand {
-  display: block;
+  display: none;
   color: var(--muted-foreground);
   font-size: 0.6875rem;
   font-weight: 650;
@@ -786,7 +915,7 @@ samp {
   max-inline-size: min(30vw, 22rem);
   overflow: hidden;
   font-size: 0.875rem;
-  font-weight: 650;
+  font-weight: 620;
   line-height: 1.4;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -794,12 +923,12 @@ samp {
 
 .connection-badge {
   display: inline-flex;
-  min-block-size: 2rem;
+  min-block-size: 1.75rem;
   align-items: center;
   gap: 0.4rem;
-  border: 1px solid var(--border);
+  border: 0;
   border-radius: 999px;
-  padding-inline: 0.625rem;
+  padding-inline: 0.375rem;
   color: var(--muted-foreground);
   font-size: 0.6875rem;
   font-weight: 600;
@@ -837,7 +966,7 @@ samp {
   min-block-size: 2.25rem;
   align-items: center;
   border: 1px solid var(--border);
-  border-radius: 0.625rem;
+  border-radius: 0.5rem;
   background: var(--surface);
   padding-inline: 0.25rem;
 }
@@ -880,17 +1009,20 @@ samp {
 }
 
 .artifact-rail {
-  position: relative;
+  position: fixed;
+  inset-block: 0;
+  inset-inline-end: 0;
   z-index: 28;
   display: flex;
-  inline-size: var(--artifact-width, 22rem);
-  max-inline-size: 42vw;
-  min-inline-size: 17rem;
+  inline-size: clamp(17.5rem, var(--artifact-width, var(--inspector-width)), 32.5rem);
+  max-inline-size: min(38vw, 32.5rem);
+  min-inline-size: 17.5rem;
   block-size: 100dvh;
   flex-direction: column;
   overflow: hidden;
   border-inline-start: 1px solid var(--border);
   background: var(--sidebar);
+  box-shadow: 0 24px 60px oklch(0.06 0.02 270 / 0.24);
 }
 
 .artifact-resizer {
@@ -919,14 +1051,23 @@ samp {
 }
 
 .artifact-rail__header {
-  min-block-size: 4rem;
+  min-block-size: var(--header-height);
   border-block-end: 1px solid var(--border);
   padding-inline: 0.875rem;
 }
 
 .artifact-rail__header h2 {
+  min-inline-size: 0;
+  flex: 1;
   font-size: 0.875rem;
   font-weight: 650;
+}
+
+.artifact-rail__actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 0.125rem;
 }
 
 .artifact-tabs {
@@ -934,17 +1075,17 @@ samp {
   gap: 0.25rem;
   overflow-x: auto;
   border-block-end: 1px solid var(--border);
-  padding: 0.5rem;
+  padding: 0.375rem;
 }
 
 .artifact-tabs button {
   display: inline-flex;
   min-inline-size: 0;
-  min-block-size: 2.5rem;
+  min-block-size: 2rem;
   flex: none;
   align-items: center;
   gap: 0.45rem;
-  border-radius: 0.625rem;
+  border-radius: 0.5rem;
   padding-inline: 0.625rem;
   color: var(--muted-foreground);
   font-size: 0.75rem;
@@ -972,7 +1113,7 @@ samp {
   flex: 1;
   overflow: auto;
   overscroll-behavior: contain;
-  padding: 0.875rem;
+  padding: 0.75rem;
 }
 
 .artifact-preview--document {
@@ -1032,15 +1173,15 @@ samp {
   block-size: 100%;
   overflow-y: auto;
   overscroll-behavior-y: contain;
-  scroll-padding-block: 2rem calc(var(--composer-block-size) + 1.5rem);
-  padding-block: 1.5rem calc(var(--composer-block-size) + 1.5rem);
-  padding-inline: clamp(1rem, 4vw, 3rem);
+  scroll-padding-block: 1.25rem calc(var(--composer-block-size) + 1rem);
+  padding-block: 1rem calc(var(--composer-block-size) + 1rem);
+  padding-inline: clamp(0.75rem, 3vw, 2rem);
 }
 
 .transcript-empty {
   display: grid;
   min-block-size: min(70dvh, 40rem);
-  max-inline-size: 34rem;
+  max-inline-size: 32rem;
   place-content: center;
   justify-items: center;
   margin-inline: auto;
@@ -1050,20 +1191,20 @@ samp {
 
 .transcript-empty__icon {
   display: grid;
-  inline-size: 3rem;
-  block-size: 3rem;
+  inline-size: 2.5rem;
+  block-size: 2.5rem;
   place-items: center;
-  margin-block-end: 1rem;
+  margin-block-end: 0.75rem;
   border: 1px solid color-mix(in oklab, var(--primary) 24%, var(--border));
-  border-radius: 1rem;
+  border-radius: 0.75rem;
   background: color-mix(in oklab, var(--primary) 9%, var(--surface));
   color: var(--primary);
 }
 
 .transcript-empty h2 {
   color: var(--foreground);
-  font-size: clamp(1.35rem, 3vw, 1.75rem);
-  font-weight: 650;
+  font-size: clamp(1.125rem, 2.2vw, 1.375rem);
+  font-weight: 620;
   letter-spacing: -0.025em;
 }
 
@@ -1081,7 +1222,7 @@ samp {
   position: relative;
   min-inline-size: 0;
   inline-size: 100%;
-  max-inline-size: 54rem;
+  max-inline-size: var(--content-chat-max);
   margin-inline: auto;
 }
 
@@ -1092,39 +1233,53 @@ samp {
   min-inline-size: 0;
   inline-size: 100%;
   max-inline-size: 100%;
-  padding-block: 0.5rem;
+  padding-block: 0.25rem;
 }
 
 .message {
   min-inline-size: 0;
   inline-size: 100%;
-  padding-block: 0.875rem 1rem;
-  padding-inline: clamp(0.75rem, 2vw, 1.25rem);
-  border: 1px solid transparent;
-  border-radius: 1rem;
+  padding-block: 0.5rem 0.625rem;
+  padding-inline: 0;
+  border: 0;
+  border-radius: 0;
 }
 
 .message--user {
   inline-size: fit-content;
-  max-inline-size: min(88%, 44rem);
+  max-inline-size: min(86%, 42rem);
   margin-inline-start: auto;
-  border-color: color-mix(in oklab, var(--primary) 14%, var(--border));
+  border: 1px solid color-mix(in oklab, var(--primary) 12%, var(--border));
+  border-radius: 1.125rem;
   background: color-mix(in oklab, var(--primary) 7%, var(--surface));
+  padding-block: 0.625rem;
+  padding-inline: 0.875rem;
 }
 
 .message--system {
-  border-color: var(--border);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
   background: var(--muted);
+  padding-inline: 0.75rem;
 }
 
 .message__header {
   display: flex;
   min-inline-size: 0;
   align-items: center;
-  gap: 0.625rem;
-  margin-block-end: 0.5rem;
+  min-block-size: 1rem;
+  gap: 0.5rem;
+  margin-block-end: 0.25rem;
   color: var(--muted-foreground);
-  font-size: 0.75rem;
+  font-size: 0.6875rem;
+  opacity: 0.34;
+  transition: opacity 120ms ease;
+}
+
+.message:hover .message__header,
+.message:focus-within .message__header,
+.message--user .message__header {
+  opacity: 0.76;
 }
 
 .message__header > :first-child {
@@ -1192,10 +1347,10 @@ samp {
 
 .message__footer {
   display: flex;
-  min-block-size: 2rem;
+  min-block-size: 1.75rem;
   align-items: center;
   gap: 0.75rem;
-  margin-block-start: 0.375rem;
+  margin-block-start: 0.125rem;
 }
 
 .message__interrupted {
@@ -1204,7 +1359,7 @@ samp {
 }
 
 .message-copy {
-  min-block-size: 2rem;
+  min-block-size: 1.75rem;
   margin-inline-start: auto;
   border-radius: 0.5rem;
   padding-inline: 0.5rem;
@@ -1232,7 +1387,7 @@ samp {
   inset-block-end: calc(var(--composer-block-size) + 0.75rem);
   inset-inline-start: 50%;
   z-index: 10;
-  min-block-size: 2.5rem;
+  min-block-size: 2.25rem;
   translate: -50% 0;
   border-color: var(--border);
   background: color-mix(in oklab, var(--surface-raised) 92%, transparent);
@@ -1252,12 +1407,31 @@ samp {
 .prompt-card {
   min-inline-size: 0;
   inline-size: 100%;
-  max-inline-size: 52rem;
+  max-inline-size: var(--content-chat-max);
   margin-inline: auto;
   border: 1px solid var(--border);
-  border-radius: 0.875rem;
-  background: var(--surface);
-  box-shadow: 0 1px 2px oklch(0.2 0.02 270 / 0.035);
+  border-radius: 0.5rem;
+  background: transparent;
+}
+
+.tool-card {
+  border-color: transparent;
+}
+
+.tool-card--disclosure {
+  box-shadow: none;
+}
+
+.tool-card--prominent {
+  border-color: color-mix(in oklab, var(--destructive) 30%, var(--border));
+  background: color-mix(in oklab, var(--destructive) 5%, var(--surface));
+}
+
+.tool-card:hover,
+.tool-card:focus-within,
+.tool-card[open] {
+  border-color: var(--border);
+  background: color-mix(in oklab, var(--surface) 72%, transparent);
 }
 
 .tool-card__header {
@@ -1265,13 +1439,13 @@ samp {
   min-inline-size: 0;
   inline-size: 100%;
   max-inline-size: 100%;
-  min-block-size: 3rem;
+  min-block-size: 2.25rem;
   align-items: center;
   justify-content: space-between;
-  gap: 1rem;
+  gap: 0.5rem;
   border-radius: inherit;
-  padding-block: 0.625rem;
-  padding-inline: 0.875rem;
+  padding-block: 0.25rem;
+  padding-inline: 0.5rem;
   text-align: start;
   cursor: pointer;
 }
@@ -1359,8 +1533,8 @@ samp {
 .tool-card__summary {
   min-inline-size: 0;
   overflow-wrap: anywhere;
-  padding-block: 0.25rem 0.75rem;
-  padding-inline: 0.875rem;
+  padding-block: 0.125rem 0.5rem;
+  padding-inline: 0.5rem;
   color: var(--muted-foreground);
   font-size: 0.8125rem;
 }
@@ -1369,9 +1543,9 @@ samp {
   display: grid;
   min-inline-size: 0;
   grid-template-columns: minmax(0, 1fr);
-  gap: 0.75rem;
+  gap: 0.5rem;
   border-block-start: 1px solid var(--border);
-  padding: 0.875rem;
+  padding: 0.625rem;
 }
 
 .tool-card__body > section {
@@ -1409,8 +1583,10 @@ samp {
 }
 
 .prompt-card {
-  padding: 1rem;
+  padding: 0.875rem;
   border-color: color-mix(in oklab, var(--warning) 36%, var(--border));
+  background: var(--surface);
+  box-shadow: var(--shadow-surface);
 }
 
 .prompt-card > header {
@@ -1475,11 +1651,11 @@ samp {
   z-index: 20;
   min-inline-size: 0;
   inline-size: 100%;
-  max-inline-size: 58rem;
+  max-inline-size: var(--content-chat-max);
   margin-inline: auto;
-  padding-block: 0.75rem max(0.75rem, env(safe-area-inset-bottom));
-  padding-inline: clamp(0.75rem, 3vw, 1.5rem);
-  background: linear-gradient(to bottom, transparent, var(--background) 28%);
+  padding-block: 0.5rem max(0.5rem, env(safe-area-inset-bottom));
+  padding-inline: clamp(0.5rem, 2vw, 0.75rem);
+  background: linear-gradient(to bottom, transparent, var(--background) 22%);
 }
 
 .composer-wrap--dragging .composer {
@@ -1494,7 +1670,7 @@ samp {
   display: grid;
   place-items: center;
   border: 2px dashed var(--primary);
-  border-radius: 1.125rem;
+  border-radius: 1rem;
   background: color-mix(in oklab, var(--surface-raised) 93%, transparent);
   color: var(--primary);
   font-weight: 650;
@@ -1504,12 +1680,12 @@ samp {
 .composer {
   position: relative;
   display: grid;
-  gap: 0.375rem;
+  gap: 0.25rem;
   border: 1px solid var(--input);
-  border-radius: 1.125rem;
+  border-radius: 1.25rem;
   background: var(--surface-raised);
-  padding-block: 0.75rem 0.5rem;
-  padding-inline: 0.875rem 0.5rem;
+  padding-block: 0.5rem 0.375rem;
+  padding-inline: 0.75rem 0.375rem;
   box-shadow: var(--shadow-surface);
   transition: border-color 140ms ease, box-shadow 140ms ease;
 }
@@ -1523,16 +1699,16 @@ samp {
 
 .composer textarea {
   inline-size: 100%;
-  min-block-size: 3rem;
-  max-block-size: 15rem;
+  min-block-size: 2.25rem;
+  max-block-size: 13rem;
   resize: none;
   border: 0;
   outline: 0;
   background: transparent;
-  padding-block: 0.25rem;
+  padding-block: 0.25rem 0;
   padding-inline: 0.25rem 0.5rem;
   color: var(--foreground);
-  line-height: 1.75;
+  line-height: 1.6;
   text-align: start;
   unicode-bidi: plaintext;
   overflow-y: auto;
@@ -1546,11 +1722,12 @@ samp {
 .composer__actions {
   display: flex;
   align-items: center;
-  gap: 0.125rem;
+  gap: 0;
 }
 
 .composer__send {
-  inline-size: 2.75rem;
+  inline-size: 2.25rem;
+  min-block-size: 2.25rem;
   margin-inline-start: auto;
   padding: 0;
   background: var(--primary);
@@ -1561,6 +1738,52 @@ samp {
   transform: scale(0.96);
 }
 
+.composer-settings__menu {
+  inset-block-end: calc(100% + 0.5rem);
+  inset-inline-start: 0;
+  inline-size: min(18rem, calc(100vw - 1.5rem));
+  padding: 0.5rem;
+}
+
+.composer-settings__field {
+  display: grid;
+  min-inline-size: 0;
+  grid-template-columns: 5.25rem minmax(0, 1fr);
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0.25rem;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+
+.composer-settings__field select {
+  min-inline-size: 0;
+  inline-size: 100%;
+  block-size: 2rem;
+  border: 1px solid var(--input);
+  border-radius: 0.375rem;
+  background: var(--background);
+  padding-inline: 0.5rem;
+  color: var(--foreground);
+  font-family: "JetBrains Mono Variable", ui-monospace, monospace;
+  font-size: 0.75rem;
+}
+
+.composer-settings__toggle {
+  display: flex;
+  min-block-size: 2.25rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.625rem;
+  padding-inline: 0.25rem;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+
+.composer-settings__toggle input {
+  accent-color: var(--primary);
+}
+
 .command-menu {
   position: absolute;
   inset-block-end: calc(100% + 0.5rem);
@@ -1569,7 +1792,7 @@ samp {
   max-block-size: min(22rem, 48dvh);
   overflow-y: auto;
   border: 1px solid var(--border);
-  border-radius: 0.875rem;
+  border-radius: 0.75rem;
   background: var(--popover);
   padding: 0.375rem;
   box-shadow: var(--shadow-surface);
@@ -1646,7 +1869,7 @@ samp {
   overflow-y: auto;
   overscroll-behavior-y: contain;
   border: 1px solid var(--border);
-  border-radius: 0.875rem;
+  border-radius: 0.75rem;
   background: var(--surface);
   padding: 0.5rem;
   box-shadow: 0 1px 2px oklch(0.2 0.02 270 / 0.04);
@@ -1731,7 +1954,7 @@ samp {
   align-items: center;
   overflow: visible;
   border: 1px solid var(--border);
-  border-radius: 0.875rem;
+  border-radius: 0.75rem;
   background: var(--surface);
   padding: 0.5rem;
 }
@@ -1974,7 +2197,14 @@ samp {
   }
 
   .message-copy {
+    inline-size: 2.75rem;
+    padding-inline: 0;
+    font-size: 0;
     opacity: 1;
+  }
+
+  .message__footer {
+    gap: 0.25rem;
   }
 
   .message--user {
@@ -2009,9 +2239,108 @@ samp {
   .voice-preview audio {
     inline-size: 100%;
   }
+
+  .settings-theme-options button {
+    justify-content: center;
+    gap: 0.375rem;
+    padding-inline: 0.5rem !important;
+  }
+
+  .settings-theme-options .lucide-check {
+    display: none;
+  }
 }
 
-@media (max-width: 60rem) {
+@media (max-width: 42rem) {
+  .button,
+  .icon-button,
+  .composer__send,
+  .jump-latest,
+  .message-copy {
+    min-block-size: 2.75rem;
+  }
+
+  .icon-button,
+  .composer__send {
+    inline-size: 2.75rem;
+  }
+
+  .session-row__main,
+  .session-row__actions,
+  .tool-card__header,
+  .artifact-tabs button,
+  .command-menu button,
+  .header-more__menu :is(button, a),
+  .composer-settings__toggle {
+    min-block-size: 2.75rem;
+  }
+
+  .composer-settings__field select {
+    block-size: 2.75rem;
+  }
+
+  .chat-main {
+    --composer-block-size: 6.5rem;
+  }
+}
+
+@media (min-width: 86.001rem) {
+  .app-shell--inspector-pinned {
+    grid-template-columns: var(--session-column) minmax(0, 1fr) auto;
+  }
+
+  .app-shell--inspector-pinned .artifact-rail {
+    position: relative;
+    inset: auto;
+    inline-size: min(
+      clamp(17.5rem, var(--artifact-width, var(--inspector-width)), 32.5rem),
+      calc(100vw - var(--workspace-rail-width) - var(--session-column) - 42.5rem)
+    );
+    max-inline-size: min(38vw, 32.5rem);
+    box-shadow: none;
+  }
+
+  .app-shell--inspector-pinned .artifact-resizer {
+    display: block;
+  }
+}
+
+@media (max-width: 86rem) {
+  .app-shell {
+    grid-template-columns: var(--session-column) minmax(0, 1fr);
+  }
+
+  .artifact-rail {
+    position: fixed;
+    inset-block: 0;
+    inset-inline-end: 0;
+    inline-size: min(var(--artifact-width, var(--inspector-width)), 92vw);
+    max-inline-size: none;
+    border-inline-start: 1px solid var(--border);
+    box-shadow: 0 24px 60px oklch(0.06 0.02 270 / 0.24);
+    translate: 0;
+  }
+
+  .artifact-resizer {
+    display: none;
+  }
+
+  .shell-overlay--inspector {
+    position: fixed;
+    inset: 0;
+    z-index: 27;
+    display: block;
+    inline-size: 100%;
+    block-size: 100%;
+    border: 0;
+    background: oklch(0.08 0.015 270 / 0.42);
+    cursor: default;
+    backdrop-filter: blur(2px);
+    animation: shell-overlay-in 160ms ease-out both;
+  }
+}
+
+@media (max-width: 68rem) {
   .app-shell {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -2070,12 +2399,12 @@ samp {
     max-inline-size: none;
     border-inline-start: 1px solid var(--border);
     box-shadow: 0 24px 60px oklch(0.06 0.02 270 / 0.28);
-    translate: -105% 0;
+    translate: 0;
     transition: translate 180ms ease-out;
   }
 
   [dir="ltr"] .artifact-rail {
-    translate: 105% 0;
+    translate: 0;
   }
 
   .artifact-rail--mobile-open,
@@ -2091,10 +2420,11 @@ samp {
     display: inline-flex;
   }
 
-  .header-wide-action,
-  .reasoning-select,
-  .profile-select,
-  .fast-toggle {
+  .chat-header__identity .chat-header__panel-trigger {
+    display: inline-flex;
+  }
+
+  .header-wide-action {
     display: none;
   }
 
@@ -2117,7 +2447,6 @@ samp {
   }
 
   .app-mark,
-  .model-select,
   .chat-header__controls > .icon-button:not(.header-mobile-action):not(:last-of-type) {
     display: none;
   }
@@ -2149,33 +2478,46 @@ samp {
 .workspace-shell {
   display: grid;
   min-block-size: 100dvh;
-  grid-template-columns: 5.5rem minmax(0, 1fr);
+  grid-template-columns: var(--workspace-rail-width) minmax(0, 1fr);
   overflow: hidden;
 }
 
 .workspace-nav {
+  position: relative;
   z-index: 45;
+  min-inline-size: 0;
+  min-block-size: 100dvh;
+}
+
+.workspace-nav__surface {
   display: flex;
+  inline-size: var(--workspace-rail-width);
   min-block-size: 100dvh;
   flex-direction: column;
-  gap: 0.35rem;
   border-inline-end: 1px solid var(--border);
   background: var(--sidebar);
-  padding: 0.75rem 0.5rem;
+  padding-block: 0.5rem;
+  padding-inline: 0.375rem;
+}
+
+.workspace-nav__links {
+  display: flex;
+  min-inline-size: 0;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
 }
 
 .workspace-nav__item {
-  display: flex;
-  min-block-size: 3.75rem;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 0.25rem;
-  border-radius: 0.75rem;
+  display: grid;
+  inline-size: 2.5rem;
+  min-block-size: 2.5rem;
+  place-items: center;
+  border-radius: 0.5rem;
   color: var(--muted-foreground);
-  font-size: 0.6875rem;
   font-weight: 600;
   text-decoration: none;
+  transition: color 140ms ease, background-color 140ms ease;
 }
 
 .workspace-nav__item:hover,
@@ -2188,8 +2530,20 @@ samp {
   color: var(--primary);
 }
 
-.workspace-nav__item.workspace-nav__item--active > span {
-  color: var(--foreground);
+.workspace-nav__label {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.workspace-nav__mobile-trigger,
+.workspace-nav__mobile-header,
+.workspace-nav__close,
+.workspace-nav__scrim {
+  display: none;
 }
 
 .workspace-shell__body,
@@ -2200,8 +2554,186 @@ samp {
   block-size: 100dvh;
 }
 
+.workspace-shell__chat {
+  container-name: chat-workspace;
+  container-type: inline-size;
+}
+
 .workspace-shell__module {
   overflow: auto;
+}
+
+.product-page {
+  min-inline-size: 0;
+  padding-inline: clamp(0.75rem, 2.25vw, 1.5rem);
+  padding-block-end: 2rem;
+}
+
+.product-page-content {
+  min-inline-size: 0;
+  max-inline-size: var(--content-page-max);
+  margin-inline: auto;
+}
+
+.product-page-header {
+  min-block-size: var(--header-height);
+  block-size: var(--header-height);
+}
+
+.product-page-header h1 {
+  font-size: 1rem;
+  font-weight: 650;
+}
+
+.product-page-intro {
+  padding-block: 0.75rem;
+}
+
+.product-surface {
+  min-inline-size: 0;
+  border-radius: 0.75rem;
+  box-shadow: none;
+}
+
+.product-section > header,
+.automation-row > header,
+.settings-section > header {
+  min-inline-size: 0;
+}
+
+.automation-list,
+.automation-row,
+.automation-details,
+.knowledge-pane,
+.settings-section {
+  min-inline-size: 0;
+}
+
+@container (min-width: 56rem) {
+  .knowledge-layout {
+    grid-template-columns: minmax(0, 1.2fr) minmax(20rem, 0.8fr);
+  }
+
+  .knowledge-review-pane {
+    border-block-start: 0;
+    border-inline-start: 1px solid var(--border);
+  }
+}
+
+/* Panel decisions are keyed to the real chat workspace width. Viewport media
+   queries above remain a fallback for older embedded webviews. */
+@container chat-workspace (min-width: 86.001rem) {
+  .app-shell--inspector-pinned {
+    grid-template-columns: var(--session-column) minmax(0, 1fr) auto;
+  }
+
+  .app-shell--inspector-pinned .artifact-rail {
+    position: relative;
+    inset: auto;
+    inline-size: min(
+      clamp(17.5rem, var(--artifact-width, var(--inspector-width)), 32.5rem),
+      calc(100cqi - var(--session-column) - 42.5rem)
+    );
+    max-inline-size: min(38vw, 32.5rem);
+    box-shadow: none;
+  }
+
+  .app-shell--inspector-pinned .artifact-resizer {
+    display: block;
+  }
+}
+
+@container chat-workspace (max-width: 86rem) {
+  .app-shell,
+  .app-shell--inspector-pinned {
+    grid-template-columns: var(--session-column) minmax(0, 1fr);
+  }
+
+  .artifact-rail,
+  .app-shell--inspector-pinned .artifact-rail {
+    position: fixed;
+    inset-block: 0;
+    inset-inline-end: 0;
+    inline-size: min(var(--artifact-width, var(--inspector-width)), 92vw);
+    max-inline-size: none;
+    border-inline-start: 1px solid var(--border);
+    box-shadow: 0 24px 60px oklch(0.06 0.02 270 / 0.24);
+    translate: 0;
+  }
+
+  .artifact-resizer,
+  .app-shell--inspector-pinned .artifact-resizer {
+    display: none;
+  }
+
+  .shell-overlay--inspector {
+    position: fixed;
+    inset: 0;
+    z-index: 27;
+    display: block;
+    inline-size: 100%;
+    block-size: 100%;
+    border: 0;
+    background: oklch(0.08 0.015 270 / 0.42);
+    backdrop-filter: blur(2px);
+  }
+}
+
+@container chat-workspace (max-width: 68rem) {
+  .app-shell,
+  .app-shell--inspector-pinned {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .chat-main {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .session-rail {
+    position: fixed;
+    inset-block: 0;
+    inset-inline-start: 0;
+    border-inline-end: 1px solid var(--border);
+    box-shadow: 0 24px 60px oklch(0.06 0.02 270 / 0.28);
+    translate: 105% 0;
+    transition: translate 180ms ease-out;
+  }
+
+  [dir="ltr"] .session-rail {
+    translate: -105% 0;
+  }
+
+  .session-rail--mobile-open,
+  [dir="ltr"] .session-rail--mobile-open {
+    translate: 0;
+  }
+
+  .rail-mobile-close,
+  .header-mobile-action {
+    display: inline-flex;
+  }
+
+  .rail-collapse-toggle {
+    display: none;
+  }
+
+  .chat-header__identity .chat-header__panel-trigger {
+    display: inline-flex;
+  }
+
+  .session-row__actions {
+    opacity: 1;
+  }
+
+  .artifact-rail {
+    inline-size: min(var(--artifact-width, var(--inspector-width)), 92vw);
+  }
+
+  .artifact-resizer,
+  .header-wide-action {
+    display: none;
+  }
 }
 
 .message-edit {
@@ -2296,35 +2828,132 @@ samp {
   white-space: pre-wrap;
 }
 
-@media (max-width: 52rem) {
+@media (max-width: 68rem) {
   .workspace-shell {
     display: block;
-    padding-block-end: 4.5rem;
-    overflow: visible;
+    overflow: hidden;
   }
 
   .workspace-nav {
     position: fixed;
-    inset-inline: 0;
-    inset-block-end: 0;
+    inset-block-start: 0;
+    inset-inline-start: 0;
+    z-index: 48;
+    inline-size: 3.25rem;
     min-block-size: 0;
-    block-size: 4.5rem;
-    flex-direction: row;
-    justify-content: space-around;
-    border-block-start: 1px solid var(--border);
-    border-inline-end: 0;
-    padding: 0.35rem max(0.35rem, env(safe-area-inset-right)) max(0.35rem, env(safe-area-inset-bottom));
+    block-size: var(--header-height);
+  }
+
+  .workspace-nav__mobile-trigger,
+  .workspace-nav__close {
+    display: grid;
+    inline-size: 2.75rem;
+    min-block-size: 2.75rem;
+    place-items: center;
+    border-radius: 0.5rem;
+    color: var(--muted-foreground);
+  }
+
+  .workspace-nav__mobile-trigger {
+    position: fixed;
+    inset-block-start: 0.125rem;
+    inset-inline-start: 0.25rem;
+    z-index: 50;
+  }
+
+  .workspace-nav__mobile-trigger:hover,
+  .workspace-nav__close:hover {
+    background: var(--muted);
+    color: var(--foreground);
+  }
+
+  .workspace-nav__surface {
+    position: fixed;
+    inset-block: 0;
+    inset-inline-start: 0;
+    z-index: 51;
+    inline-size: min(16.5rem, 86vw);
+    min-block-size: 100dvh;
+    border-inline-end: 1px solid var(--border);
+    padding: 0;
+    box-shadow: 0 24px 60px oklch(0.06 0.02 270 / 0.28);
+    visibility: hidden;
+    translate: 105% 0;
+    transition: translate 180ms ease-out, visibility 0s linear 180ms;
+  }
+
+  [dir="ltr"] .workspace-nav__surface {
+    translate: -105% 0;
+  }
+
+  .workspace-nav--open .workspace-nav__surface,
+  [dir="ltr"] .workspace-nav--open .workspace-nav__surface {
+    visibility: visible;
+    translate: 0;
+    transition-delay: 0s;
+  }
+
+  .workspace-nav__mobile-header {
+    display: flex;
+    min-block-size: var(--header-height);
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    border-block-end: 1px solid var(--border);
+    padding-inline: 0.75rem 0.125rem;
+    font-size: 0.875rem;
+    font-weight: 650;
+  }
+
+  .workspace-nav__links {
+    align-items: stretch;
+    gap: 0.125rem;
+    padding: 0.375rem;
   }
 
   .workspace-nav__item {
-    min-block-size: 3.5rem;
-    flex: 1;
+    inline-size: 100%;
+    min-block-size: 2.75rem;
+    grid-template-columns: 2rem minmax(0, 1fr);
+    justify-items: start;
+    gap: 0.5rem;
+    padding-inline: 0.5rem;
+  }
+
+  .workspace-nav__label {
+    position: static;
+    inline-size: auto;
+    block-size: auto;
+    overflow: visible;
+    clip-path: none;
+    color: inherit;
+    font-size: 0.8125rem;
+    white-space: normal;
+  }
+
+  .workspace-nav__scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 49;
+    display: block;
+    inline-size: 100vw;
+    block-size: 100dvh;
+    background: oklch(0.08 0.015 270 / 0.48);
+    backdrop-filter: blur(2px);
+  }
+
+  .workspace-shell__chat .chat-header {
+    padding-inline-start: 3.25rem;
+  }
+
+  .workspace-shell__module .product-page-header {
+    padding-inline-start: 3.25rem;
   }
 
   .workspace-shell__body,
   .workspace-shell__chat,
   .workspace-shell__module {
-    block-size: calc(100dvh - 4.5rem);
+    block-size: 100dvh;
   }
 
   .workspace-shell__chat .app-shell,

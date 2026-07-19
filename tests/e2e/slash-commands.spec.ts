@@ -62,8 +62,7 @@ test("opens the active-profile session picker from slash", async ({ app, page })
   }
 });
 
-test("keeps the selected provider when completing a model command", async ({ app, page }, testInfo) => {
-  test.skip(testInfo.project.name === "mobile", "model picker is intentionally desktop-only");
+test("keeps the selected provider when completing a model command", async ({ app, page }) => {
   await app.open();
   await app.ensureSession();
   await app.composer.fill("/model cla");
@@ -74,6 +73,7 @@ test("keeps the selected provider when completing a model command", async ({ app
   await app.composer.press("Tab");
   await expect(app.composer).toHaveValue("/model claude-sonnet-4.6 --provider anthropic");
   await app.composer.press("Enter");
+  await app.openComposerSettings();
   await expect(page.getByTestId("model-picker")).toHaveValue("anthropic:claude-sonnet-4.6");
 });
 

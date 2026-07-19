@@ -1,4 +1,5 @@
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -27,6 +28,47 @@ const labels = {
   cancel: "Cancel",
   dropFiles: "Drop files",
   commandPalette: "Commands",
+  settings: "Model settings",
+  model: "Model",
+  profile: "Profile",
+  reasoning: "Reasoning effort",
+  fastMode: "Fast mode",
+};
+
+const models = [
+  {
+    id: "gpt-5.6-sol",
+    provider: "openai",
+    providerName: "OpenAI",
+    current: true,
+    authenticated: true,
+    supportsReasoning: true,
+    supportsFast: true,
+  },
+  {
+    id: "claude-sonnet",
+    provider: "anthropic",
+    providerName: "Anthropic",
+    current: false,
+    authenticated: true,
+    supportsReasoning: false,
+    supportsFast: false,
+  },
+];
+
+const capabilities = {
+  gateway: true,
+  sessions: true,
+  models: true,
+  attachments: true,
+  approvals: true,
+  clarification: true,
+  sudo: true,
+  secrets: true,
+  branch: true,
+  compress: true,
+  voice: true,
+  httpFallback: false,
 };
 
 function renderComposer(overrides: Partial<React.ComponentProps<typeof Composer>> = {}) {
@@ -86,6 +128,95 @@ function ControlledComposer({
 }
 
 describe("composer keyboard and command behavior", () => {
+  it("relocates session model controls into a compact settings disclosure", async () => {
+    const user = userEvent.setup();
+    renderComposer({
+      models,
+      capabilities,
+      modelSettings: {
+        model: "gpt-5.6-sol",
+        provider: "openai",
+        reasoning: "ultra",
+        fast: true,
+      },
+      profiles: ["default", "work_profile"],
+      activeProfile: "work_profile",
+      onModelChange: vi.fn(),
+      onProfileChange: vi.fn(),
+      onReasoningChange: vi.fn(),
+      onFastChange: vi.fn(),
+    });
+
+    expect(screen.queryByTestId("model-picker")).not.toBeInTheDocument();
+    await user.click(screen.getByTestId("composer-settings-trigger"));
+
+    const settings = screen.getByRole("dialog", { name: "Model settings" });
+    expect(within(settings).getByTestId("model-picker")).toHaveValue("openai:gpt-5.6-sol");
+    expect(within(settings).getByTestId("profile-picker")).toHaveValue("work_profile");
+    expect(within(settings).getByTestId("profile-picker")).toHaveAttribute("dir", "ltr");
+    const reasoning = within(settings).getByTestId("reasoning-picker");
+    expect(reasoning).toHaveValue("ultra");
+    expect(within(reasoning).getAllByRole("option").map((option) => option.getAttribute("value"))).toEqual([
+      "none",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultra",
+    ]);
+    expect(within(settings).getByRole("checkbox", { name: "Fast mode" })).toBeChecked();
+  });
+
+  it("routes composer setting changes through session-scoped callbacks", async () => {
+    const user = userEvent.setup();
+    const onModelChange = vi.fn();
+    const onProfileChange = vi.fn();
+    const onReasoningChange = vi.fn();
+    const onFastChange = vi.fn();
+    renderComposer({
+      models,
+      capabilities,
+      modelSettings: { model: "gpt-5.6-sol", provider: "openai", reasoning: "high" },
+      profiles: ["default", "work_profile"],
+      activeProfile: "default",
+      onModelChange,
+      onProfileChange,
+      onReasoningChange,
+      onFastChange,
+    });
+
+    await user.click(screen.getByTestId("composer-settings-trigger"));
+    await user.selectOptions(screen.getByTestId("model-picker"), "anthropic:claude-sonnet");
+    await user.selectOptions(screen.getByTestId("profile-picker"), "work_profile");
+    await user.selectOptions(screen.getByTestId("reasoning-picker"), "minimal");
+    await user.click(screen.getByRole("checkbox", { name: "Fast mode" }));
+
+    expect(onModelChange).toHaveBeenCalledWith(expect.objectContaining({ id: "claude-sonnet", provider: "anthropic" }));
+    expect(onProfileChange).toHaveBeenCalledWith("work_profile");
+    expect(onReasoningChange).toHaveBeenCalledWith("minimal");
+    expect(onFastChange).toHaveBeenCalledWith(true);
+  });
+
+  it("preserves unknown reasoning values and restores settings trigger focus on Escape", async () => {
+    const user = userEvent.setup();
+    renderComposer({
+      models,
+      capabilities,
+      modelSettings: { model: "gpt-5.6-sol", provider: "openai", reasoning: "adaptive-v2" },
+      onModelChange: vi.fn(),
+      onReasoningChange: vi.fn(),
+    });
+    const trigger = screen.getByTestId("composer-settings-trigger");
+    await user.click(trigger);
+    expect(screen.getByTestId("reasoning-picker")).toHaveValue("adaptive-v2");
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    await vi.waitFor(() => expect(screen.queryByTestId("composer-settings-menu")).not.toBeInTheDocument());
+    await vi.waitFor(() => expect(trigger).toHaveFocus());
+  });
+
   it("does not submit Enter while an IME composition is active", () => {
     const props = renderComposer();
     const textarea = screen.getByRole("combobox", { name: "Message" }) as HTMLTextAreaElement;

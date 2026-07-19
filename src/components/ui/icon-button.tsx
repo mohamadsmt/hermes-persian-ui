@@ -20,7 +20,11 @@ export function IconButton({
   return (
     <Button
       aria-label={label}
-      className={cn(size === "sm" && "size-9 min-h-9 rounded-lg", className)}
+      className={cn(
+        size === "sm"
+          && "size-8 min-h-8 rounded-md max-[42rem]:size-11 max-[42rem]:min-h-11 max-[42rem]:rounded-lg",
+        className,
+      )}
       size="icon"
       title={label}
       variant={tone === "danger" ? "destructive" : "ghost"}
@@ -30,4 +34,3 @@ export function IconButton({
     </Button>
   );
 }
-

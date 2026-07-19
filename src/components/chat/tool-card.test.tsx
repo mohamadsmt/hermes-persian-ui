@@ -29,6 +29,9 @@ describe("ToolCard details", () => {
 
       expect(screen.getByRole("button")).toHaveAttribute("aria-expanded", "false");
       expect(screen.queryByText("plain output")).not.toBeInTheDocument();
+      expect(screen.getByTestId("tool-card")).toHaveClass(
+        status === "failed" ? "tool-card--prominent" : "tool-card--disclosure",
+      );
     },
   );
 

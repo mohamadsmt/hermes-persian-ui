@@ -36,6 +36,7 @@ import {
 } from "@/lib/hermes";
 import { chatSessionScopeKey, useChatUiStore } from "@/store/chat-store";
 import { useSessionRuntimeStore } from "@/store/session-runtime-store";
+import { useWorkspaceLayoutStore } from "@/store/workspace-layout-store";
 import { useHermesWorkspace } from "@/components/workspace/workspace-provider";
 
 import { ArtifactRail } from "./artifact-rail";
@@ -267,7 +268,6 @@ export function ChatShell({
 }: ChatShellProps) {
   const locale = useLocale();
   const router = useRouter();
-  const tApp = useTranslations("App");
   const tNav = useTranslations("Nav");
   const tSessions = useTranslations("Sessions");
   const tConnection = useTranslations("Connection");
@@ -367,12 +367,16 @@ export function ChatShell({
   const catalogRefreshAfterRunRef = useRef(false);
   const speechPlaybackRef = useRef<SpeechPlayback | null>(null);
 
-  const openMobileRail = useChatUiStore((state) => state.openMobileRail);
-  const setMobileRail = useChatUiStore((state) => state.setMobileRail);
   const artifactRailOpen = useChatUiStore((state) => state.artifactRailOpen);
   const setArtifactRailOpen = useChatUiStore((state) => state.setArtifactRailOpen);
-  const artifactRailWidth = useChatUiStore((state) => state.artifactRailWidth);
-  const setArtifactRailWidth = useChatUiStore((state) => state.setArtifactRailWidth);
+  const sessionRailCollapsed = useWorkspaceLayoutStore((state) => state.sessionRailCollapsed);
+  const toggleSessionRail = useWorkspaceLayoutStore((state) => state.toggleSessionRail);
+  const inspectorPinned = useWorkspaceLayoutStore((state) => state.inspectorPinned);
+  const setInspectorPinned = useWorkspaceLayoutStore((state) => state.setInspectorPinned);
+  const inspectorWidth = useWorkspaceLayoutStore((state) => state.inspectorWidth);
+  const setInspectorWidth = useWorkspaceLayoutStore((state) => state.setInspectorWidth);
+  const mobilePanel = useWorkspaceLayoutStore((state) => state.mobilePanel);
+  const setMobilePanel = useWorkspaceLayoutStore((state) => state.setMobilePanel);
   const artifactsBySession = useChatUiStore((state) => state.artifacts);
   const selectedArtifactIds = useChatUiStore((state) => state.selectedArtifactIds);
   const selectArtifact = useChatUiStore((state) => state.selectArtifact);
@@ -1433,7 +1437,7 @@ export function ChatShell({
       }
       await queryClient.invalidateQueries({ queryKey: ["hermes-sessions"] });
       await queryClient.invalidateQueries({ queryKey: ["hermes-projects"] });
-      setMobileRail(null);
+      setMobilePanel(null);
       return snapshot;
     } catch (error) {
       refreshCapabilities();
@@ -1452,20 +1456,20 @@ export function ChatShell({
         profile: session.profile ?? activeProfile,
         storedId: session.storedId,
       });
-      setMobileRail(null);
+      setMobilePanel(null);
       return;
     }
     const ownerProfile = session.profile ?? activeProfile;
     const selected = await resumeStoredSession(session.storedId, false, ownerProfile, true);
     if (selected) navigateToSession(session.storedId, "push", ownerProfile);
-    setMobileRail(null);
+    setMobilePanel(null);
   }
 
   async function selectSearchResult(sessionId: string, ownerProfile: string) {
     if (!sessionId || !ownerProfile || ownerProfile === "all") return;
     const selected = await resumeStoredSession(sessionId, false, ownerProfile, true);
     if (selected) navigateToSession(sessionId, "push", ownerProfile);
-    setMobileRail(null);
+    setMobilePanel(null);
   }
 
   async function validateNewSessionCwd(profile: string, cwd: string) {
@@ -1830,7 +1834,7 @@ export function ChatShell({
     }
     if (canonical === "sessions") {
       if (!args) {
-        setMobileRail("sessions");
+        setMobilePanel("session");
         return true;
       }
       const needle = args.toLocaleLowerCase();
@@ -2513,6 +2517,23 @@ export function ChatShell({
     }
   }
 
+  async function setSessionFast(value: boolean) {
+    if (!identity) return;
+    const targetIdentity = identity;
+    const scopeKey = chatSessionScopeKey(activeProfileRef.current, identity.storedId);
+    try {
+      await transport.request("config.set", {
+        session_id: targetIdentity.runtimeId,
+        key: "fast",
+        value,
+      });
+      setModelSettings(scopeKey, { fast: value });
+    } catch (error) {
+      refreshCapabilities();
+      setNotice({ kind: "error", message: error instanceof Error ? error.message : tErrors("generic") });
+    }
+  }
+
   async function branchSession(name?: string): Promise<SessionSnapshot | undefined> {
     if (!identity) return undefined;
     const targetIdentity = identity;
@@ -2707,13 +2728,19 @@ export function ChatShell({
   })();
 
   return (
-    <div className="app-shell" data-testid="app-shell">
+    <div
+      className={`app-shell ${sessionRailCollapsed ? "app-shell--session-collapsed" : ""} ${inspectorPinned ? "app-shell--inspector-pinned" : ""}`}
+      data-testid="app-shell"
+      data-session-rail-collapsed={sessionRailCollapsed ? "true" : "false"}
+      data-inspector-pinned={inspectorPinned ? "true" : "false"}
+    >
       <SessionRail
         sessions={sessions}
         activeSessionId={identity?.storedId ?? activeStoredId}
         locale={locale}
         loading={sessionsQuery.isLoading || loadingSession || (projectTreeEnabled && projectsQuery.isLoading)}
-        mobileOpen={openMobileRail === "sessions"}
+        mobileOpen={mobilePanel === "session"}
+        collapsed={sessionRailCollapsed}
         labels={{
           title: tSessions("title"),
           newSession: tSessions("new"),
@@ -2735,6 +2762,8 @@ export function ChatShell({
           statusWorking: tSessions("statusWorking"),
           statusUnread: tSessions("statusUnread"),
           statusIdle: tSessions("statusIdle"),
+          collapse: tNav("collapseSidebar"),
+          expand: tNav("expandSidebar"),
         }}
         projectBrowser={(
           <ProjectSessionBrowser
@@ -2748,7 +2777,8 @@ export function ChatShell({
         projectRecentSessions={projectRecentSessions}
         canCreate={gatewaySessionControls}
         canManage={gatewaySessionControls}
-        onCloseMobile={() => setMobileRail(null)}
+        onCloseMobile={() => setMobilePanel(null)}
+        onToggleCollapsed={toggleSessionRail}
         onCreate={() => setNewSessionOpen(true)}
         onSelect={(session) => void selectSession(session)}
         onRename={renameSession}
@@ -2767,14 +2797,10 @@ export function ChatShell({
           title={sessionTitle}
           connection={connection}
           backendVersion={bootstrap?.backend?.version}
-          models={models}
-          modelSettings={identity ? currentModelSettings : {}}
-          profiles={profiles}
-          activeProfile={activeProfile}
           capabilities={capabilities}
           running={running}
+          inspectorPinned={inspectorPinned}
           labels={{
-            appName: tApp("name"),
             openSessions: tNav("openSessions"),
             openWorkspace: tNav("openWorkspace"),
             settings: tNav("settings"),
@@ -2783,27 +2809,29 @@ export function ChatShell({
             reconnecting: tConnection("reconnecting"),
             disconnected: tConnection("disconnected"),
             unavailable: tConnection("unavailable"),
-            model: tModels("title"),
-            profile: tSessions("profile"),
-            reasoning: tModels("reasoning"),
-            fastMode: tModels("fastMode"),
             theme: tSettings("theme"),
             branch: tSessions("branch"),
             compress: tSessions("compress"),
             recovery: tSessions("recovery"),
+            more: tNav("moreActions"),
+            pinInspector: tNav("pinInspector"),
+            unpinInspector: tNav("unpinInspector"),
           }}
-          onOpenSessions={() => setMobileRail("sessions")}
+          onOpenSessions={() => setMobilePanel("session")}
           onOpenArtifacts={() => {
             setRightRailMode("files");
             setArtifactRailOpen(true);
-            setMobileRail("artifacts");
+            const narrow = typeof window.matchMedia === "function"
+              && window.matchMedia("(max-width: 68rem)").matches;
+            setMobilePanel(narrow ? "inspector" : null);
           }}
-          onModelChange={changeModel}
-          onProfileChange={openProfileWorkspace}
-          onReasoningChange={setSessionReasoning}
           onBranch={() => setSessionAction("branch")}
           onCompress={() => setSessionAction("compress")}
           onRecovery={identity && !running && (gatewayContract ?? 0) >= 4 ? () => void openRecovery() : undefined}
+          onToggleInspectorPin={() => {
+            setInspectorPinned(!inspectorPinned);
+            if (!inspectorPinned) setArtifactRailOpen(true);
+          }}
         />
 
         {notice ? (
@@ -2878,6 +2906,11 @@ export function ChatShell({
           attachments={attachments}
           queue={queue}
           commands={commands}
+          models={models}
+          modelSettings={identity ? currentModelSettings : {}}
+          profiles={dialogProfiles}
+          activeProfile={activeProfile}
+          capabilities={capabilities}
           slashAvailable={slashAvailable}
           slashUnavailableReason={slashUnavailableReason}
           disabled={!identity || connection !== "connected" || loadingSession}
@@ -2901,6 +2934,11 @@ export function ChatShell({
             cancel: tComposer("cancel"),
             dropFiles: tComposer("dropFiles"),
             commandPalette: tComposer("commandPalette"),
+            settings: tNav("openModelSettings"),
+            model: tModels("title"),
+            profile: tSessions("profile"),
+            reasoning: tModels("reasoning"),
+            fastMode: tModels("fastMode"),
           }}
           onChange={(value) => setDraft(composerKey, value)}
           onSend={(value) => dispatchMessage(value)}
@@ -2913,14 +2951,19 @@ export function ChatShell({
           onVoice={transcribe}
           onVoiceError={(message) => setNotice({ kind: "warning", message })}
           onCompleteSlash={completeSlash}
+          onModelChange={changeModel}
+          onProfileChange={openProfileWorkspace}
+          onReasoningChange={setSessionReasoning}
+          onFastChange={setSessionFast}
         />
       </section>
 
       {rightRailMode === "files" ? (
         <WorkspaceFilesRail
           artifactCount={artifacts.length}
+          inspectorPinned={inspectorPinned}
           locale={locale}
-          mobileOpen={openMobileRail === "artifacts"}
+          mobileOpen={mobilePanel === "inspector"}
           onAttach={
             identity && connection === "connected" && capabilities?.gateway && capabilities.attachments && !running
               ? attachWorkspaceEntry
@@ -2929,44 +2972,52 @@ export function ChatShell({
           onCapabilityChange={reportWorkspaceCapability}
           onClose={() => {
             setArtifactRailOpen(false);
-            setMobileRail(null);
+            setMobilePanel(null);
           }}
           onOpenArtifacts={() => setRightRailMode("artifacts")}
+          onToggleInspectorPin={() => setInspectorPinned(!inspectorPinned)}
           open={artifactRailOpen}
           profile={activeProfile}
+          pinLabel={tNav("pinInspector")}
           refreshKey={workspaceRefreshKey}
           sessionId={identity?.storedId}
-          width={artifactRailWidth}
+          unpinLabel={tNav("unpinInspector")}
+          width={inspectorWidth}
         />
       ) : (
         <ArtifactRail
           artifacts={artifacts}
           selectedId={selectedArtifactId}
           open={artifactRailOpen}
-          mobileOpen={openMobileRail === "artifacts"}
-          width={artifactRailWidth}
+          mobileOpen={mobilePanel === "inspector"}
+          width={inspectorWidth}
           labels={{
             title: tTools("title"),
             empty: tAttachments("previewUnavailable"),
             close: tNav("closePanel"),
+            pin: tNav("pinInspector"),
             resize: tNav("collapseSidebar"),
+            unpin: tNav("unpinInspector"),
             previewUnavailable: tAttachments("previewUnavailable"),
           }}
           onSelect={(id) => selectArtifact(composerKey, id)}
           onClose={() => {
             setArtifactRailOpen(false);
-            setMobileRail(null);
+            setMobilePanel(null);
           }}
-          onWidthChange={setArtifactRailWidth}
+          pinned={inspectorPinned}
+          onTogglePin={() => setInspectorPinned(!inspectorPinned)}
+          onWidthChange={setInspectorWidth}
         />
       )}
 
-      {openMobileRail ? (
+      {mobilePanel === "session" || mobilePanel === "inspector" ? (
         <button
           type="button"
-          className="shell-overlay"
+          className={`shell-overlay shell-overlay--${mobilePanel}`}
           aria-label={tNav("closePanel")}
-          onClick={() => setMobileRail(null)}
+          data-panel={mobilePanel}
+          onClick={() => setMobilePanel(null)}
         />
       ) : null}
 

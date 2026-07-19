@@ -116,9 +116,9 @@ function PendingOperations({operations}: {operations: PendingOperation[]}) {
     return <p className="mt-3 text-xs text-muted-foreground">{t("noStructuredChanges")}</p>;
   }
   return (
-    <div className="mt-3 grid gap-2">
+    <div className="mt-3 divide-y divide-border border-y border-border">
       {operations.map((operation, index) => (
-        <article className="rounded-lg border border-border bg-background/60 p-3" key={`${operation.path ?? "change"}:${index}`}>
+        <article className="py-3" key={`${operation.path ?? "change"}:${index}`}>
           <div className="flex flex-wrap items-center gap-2">
             <Badge tone={operationTone(operation.action)}>{t(`operation${operation.action === "add" ? "Add" : operation.action === "remove" ? "Remove" : operation.action === "replace" ? "Replace" : "Unknown"}`)}</Badge>
             {operation.path ? <TechnicalInline className="text-xs text-muted-foreground">{operation.path}</TechnicalInline> : null}
@@ -126,7 +126,7 @@ function PendingOperations({operations}: {operations: PendingOperation[]}) {
           {operation.before ? (
             <div className="mt-2">
               <p className="text-xs font-medium text-muted-foreground">{t("before")}</p>
-              <BidiBlock className="mt-1 max-h-40 overflow-y-auto whitespace-pre-wrap rounded-md bg-destructive/5 p-2 text-xs">
+              <BidiBlock className="mt-1 max-h-40 overflow-y-auto whitespace-pre-wrap rounded-md bg-destructive/5 px-2 py-1.5 text-xs">
                 {operation.before}
               </BidiBlock>
             </div>
@@ -134,7 +134,7 @@ function PendingOperations({operations}: {operations: PendingOperation[]}) {
           {operation.after ? (
             <div className="mt-2">
               <p className="text-xs font-medium text-muted-foreground">{t("after")}</p>
-              <BidiBlock className="mt-1 max-h-40 overflow-y-auto whitespace-pre-wrap rounded-md bg-success/5 p-2 text-xs">
+              <BidiBlock className="mt-1 max-h-40 overflow-y-auto whitespace-pre-wrap rounded-md bg-success/5 px-2 py-1.5 text-xs">
                 {operation.after}
               </BidiBlock>
             </div>
@@ -315,20 +315,18 @@ export function KnowledgePanel({
   const filteredTimeline = visibleTimeline.filter((node) => kindFilter === "all" || node.kind === kindFilter);
 
   return (
-    <main className={cn("min-h-full bg-background px-4 py-6 sm:px-6 lg:px-8", className)} id="main-content">
-      <div className="mx-auto w-full max-w-6xl">
-        <header className="mb-6 flex flex-wrap items-start gap-4">
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
-              <Brain aria-hidden="true" className="size-6 text-primary" />
-              <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">{t("title")}</h1>
-              {stale ? <Badge tone="warning">{t("stale")}</Badge> : null}
-            </div>
-            <p className="mt-2 max-w-3xl text-sm leading-7 text-muted-foreground">
-              {t("description")}
-            </p>
-          </div>
-          <Button disabled={loading || !available} onClick={() => void refresh()} variant="secondary">
+    <main className={cn("product-page min-h-full bg-background px-4 pb-8 sm:px-6", className)} id="main-content">
+      <div className="product-page-content mx-auto w-full max-w-[70rem] [container-type:inline-size]">
+        <header className="product-page-header flex min-h-12 items-center gap-3 border-b border-border">
+          <Brain aria-hidden="true" className="size-5 shrink-0 text-primary" />
+          <h1 className="min-w-0 flex-1 truncate text-lg font-semibold tracking-tight">{t("title")}</h1>
+          {stale ? <Badge tone="warning">{t("stale")}</Badge> : null}
+          <Button
+            disabled={loading || !available}
+            onClick={() => void refresh()}
+            size="sm"
+            variant="secondary"
+          >
             {loading ? (
               <LoaderCircle aria-hidden="true" className="size-4 animate-spin motion-reduce:animate-none" />
             ) : (
@@ -338,12 +336,18 @@ export function KnowledgePanel({
           </Button>
         </header>
 
+        <div className="product-page-intro py-4">
+          <p className="max-w-3xl text-sm leading-6 text-muted-foreground">{t("description")}</p>
+        </div>
+
         {!available ? (
-          <div className="rounded-2xl border border-dashed border-border bg-surface p-8 text-center">
-            <ShieldAlert aria-hidden="true" className="mx-auto size-8 text-muted-foreground" />
-            <h2 className="mt-3 font-semibold">{t("unavailableTitle")}</h2>
-            <p className="mt-1 text-sm text-muted-foreground">{t("unavailableDescription")}</p>
-          </div>
+          <section className="product-surface flex items-start gap-3 rounded-xl border border-border bg-surface px-4 py-6 sm:px-5">
+            <ShieldAlert aria-hidden="true" className="mt-0.5 size-5 shrink-0 text-muted-foreground" />
+            <div className="min-w-0">
+              <h2 className="text-sm font-semibold">{t("unavailableTitle")}</h2>
+              <p className="mt-1 text-sm text-muted-foreground">{t("unavailableDescription")}</p>
+            </div>
+          </section>
         ) : null}
 
         {error ? (
@@ -353,11 +357,11 @@ export function KnowledgePanel({
         ) : null}
 
         {available ? (
-          <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1.2fr)_minmax(20rem,0.8fr)]">
-            <section className="overflow-hidden rounded-2xl border border-border bg-surface shadow-surface">
-              <header className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-3 sm:px-5">
-                <BookOpen aria-hidden="true" className="size-5 text-primary" />
-                <h2 className="min-w-0 flex-1 font-semibold">{t("timeline")}</h2>
+          <div className="product-surface knowledge-layout grid min-w-0 overflow-hidden rounded-xl border border-border bg-surface">
+            <section className="knowledge-pane knowledge-timeline-pane min-w-0 overflow-hidden">
+              <header className="flex min-h-12 flex-wrap items-center gap-3 border-b border-border px-4 py-2 sm:px-5">
+                <BookOpen aria-hidden="true" className="size-4 text-primary" />
+                <h2 className="min-w-0 flex-1 text-sm font-semibold">{t("timeline")}</h2>
                 <div aria-label={t("filterLabel")} className="flex rounded-lg bg-muted p-1" role="group">
                   {(["all", "memory", "skill"] as const).map((filter) => (
                     <button
@@ -376,7 +380,7 @@ export function KnowledgePanel({
                 </div>
               </header>
 
-              <div className="p-4 sm:p-5">
+              <div className="p-4 sm:px-5">
                 {loading && visibleTimeline.length === 0 ? (
                   <p className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
                     <LoaderCircle aria-hidden="true" className="size-4 animate-spin motion-reduce:animate-none" />
@@ -386,14 +390,14 @@ export function KnowledgePanel({
                 {!loading && filteredTimeline.length === 0 ? (
                   <p className="py-8 text-center text-sm text-muted-foreground">{t("emptyTimeline")}</p>
                 ) : null}
-                <ol className="grid gap-3">
+                <ol className="divide-y divide-border border-y border-border">
                   {filteredTimeline.map((node) => {
                     const expanded = selectedId === node.id;
                     return (
-                      <li className="rounded-xl border border-border bg-background/55" key={node.id}>
+                      <li className="min-w-0" key={node.id}>
                         <button
                           aria-expanded={expanded}
-                          className="flex min-h-14 w-full items-center gap-3 px-3.5 py-3 text-start"
+                          className="flex min-h-12 w-full items-center gap-3 px-2 py-2 text-start transition-colors hover:bg-muted/35 focus-visible:bg-muted/35"
                           data-testid="knowledge-timeline-row"
                           onClick={() => void openDetail(node)}
                           type="button"
@@ -419,7 +423,7 @@ export function KnowledgePanel({
                           {expanded ? <ChevronUp aria-hidden="true" className="size-4 shrink-0" /> : <ChevronDown aria-hidden="true" className="size-4 shrink-0" />}
                         </button>
                         {expanded ? (
-                          <div className="border-t border-border p-3.5">
+                          <div className="border-t border-border bg-background/30 px-3 py-3">
                             {detailLoading ? (
                               <LoaderCircle aria-label={t("loadingDetail")} className="size-4 animate-spin text-muted-foreground motion-reduce:animate-none" />
                             ) : (
@@ -428,7 +432,7 @@ export function KnowledgePanel({
                                   <BidiBlock className="text-sm text-muted-foreground">{detail?.summary ?? node.summary}</BidiBlock>
                                 ) : null}
                                 {detail?.body ?? node.body ? (
-                                  <BidiBlock className="mt-3 max-h-80 overflow-y-auto whitespace-pre-wrap rounded-lg bg-muted/50 p-3 text-sm">
+                                  <BidiBlock className="mt-3 max-h-80 overflow-y-auto whitespace-pre-wrap rounded-lg bg-muted/45 p-3 text-sm">
                                     {detail?.body ?? node.body}
                                   </BidiBlock>
                                 ) : null}
@@ -443,15 +447,15 @@ export function KnowledgePanel({
               </div>
             </section>
 
-            <section className="overflow-hidden rounded-2xl border border-border bg-surface shadow-surface">
-              <header className="flex items-center gap-3 border-b border-border px-4 py-3 sm:px-5">
-                <ShieldAlert aria-hidden="true" className="size-5 text-primary" />
-                <h2 className="min-w-0 flex-1 font-semibold">{t("pendingReviews")}</h2>
+            <section className="knowledge-pane knowledge-review-pane min-w-0 overflow-hidden border-t border-border">
+              <header className="flex min-h-12 items-center gap-3 border-b border-border px-4 py-2 sm:px-5">
+                <ShieldAlert aria-hidden="true" className="size-4 text-primary" />
+                <h2 className="min-w-0 flex-1 text-sm font-semibold">{t("pendingReviews")}</h2>
                 <Badge>{visiblePending.length}</Badge>
               </header>
-              <div className="p-4 sm:p-5">
+              <div className="p-4 sm:px-5">
                 {!reviewAllowed ? (
-                  <div className="mb-4 rounded-xl border border-warning/25 bg-warning/10 p-3 text-sm text-warning-foreground">
+                  <div className="mb-4 rounded-lg border border-warning/25 bg-warning/10 p-3 text-sm text-warning-foreground">
                     {sessionRunning
                       ? t("readOnlyRunning")
                       : !activeSessionId
@@ -462,14 +466,14 @@ export function KnowledgePanel({
                 {!loading && visiblePending.length === 0 ? (
                   <p className="py-8 text-center text-sm text-muted-foreground">{t("emptyPending")}</p>
                 ) : null}
-                <ol className="grid gap-4">
+                <ol className="divide-y divide-border border-y border-border">
                   {visiblePending.map((item) => {
                     const diff = diffs[item.id];
                     const safeId = safePendingId(item.id);
                     const approveAllowed =
                       reviewAllowed && safeId && (item.kind === "memory" || diff?.valid === true);
                     return (
-                      <li className="rounded-xl border border-border bg-background/55 p-4" key={`${item.kind}:${item.id}`}>
+                      <li className="py-4" key={`${item.kind}:${item.id}`}>
                         <div className="flex flex-wrap items-start gap-2">
                           <div className="min-w-0 flex-1">
                             <BidiBlock as="h3" className="text-sm font-semibold">{item.title}</BidiBlock>
@@ -502,7 +506,7 @@ export function KnowledgePanel({
                             </Button>
                             {diff?.error ? <p className="mt-2 text-xs text-destructive">{diff.error}</p> : null}
                             {diff?.content ? (
-                              <pre className="mt-3 max-h-80 overflow-auto rounded-lg border border-border bg-surface-raised p-3 text-xs">
+                              <pre className="mt-3 max-h-80 overflow-auto rounded-lg bg-muted/45 p-3 text-xs">
                                 <code>{diff.content}</code>
                               </pre>
                             ) : null}

@@ -188,6 +188,13 @@ test("keeps the latest item above a multiline composer and caps a long queue", a
 
   await app.sendScenario("toolRunningArtifact");
   await expect(page.getByTestId("stop-run")).toBeVisible();
+  // The inspector is an overlay at compact widths. Close it before exercising
+  // the composer queue so pointer input reaches the active conversation.
+  await page
+    .getByTestId("artifact-rail")
+    .getByRole("button", { name: /بستن پنل|Close panel/iu })
+    .click();
+  await expect(page.getByTestId("artifact-rail")).toBeHidden();
   try {
     for (let index = 0; index < 8; index += 1) {
       await app.composer.fill(`پیام صف ${index + 1}`);

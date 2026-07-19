@@ -10,8 +10,11 @@ import {
   FileSearch,
   LoaderCircle,
   MessageSquarePlus,
+  MessageSquare,
   MessageCircleQuestion,
   MoreHorizontal,
+  PanelLeftClose,
+  PanelLeftOpen,
   Pencil,
   Search,
   TriangleAlert,
@@ -35,6 +38,7 @@ type SessionRailProps = {
   locale: string;
   loading?: boolean;
   mobileOpen?: boolean;
+  collapsed?: boolean;
   labels: {
     title: string;
     newSession: string;
@@ -59,10 +63,13 @@ type SessionRailProps = {
     statusWorking?: string;
     statusUnread?: string;
     statusIdle?: string;
+    collapse?: string;
+    expand?: string;
   };
   canCreate?: boolean;
   canManage?: boolean;
   onCloseMobile?: () => void;
+  onToggleCollapsed?: () => void;
   onCreate: () => void;
   onSelect: (session: SessionSummary) => void;
   onRename: (session: SessionSummary, title: string) => Promise<void>;
@@ -225,9 +232,11 @@ export function SessionRail({
   labels,
   loading,
   mobileOpen,
+  collapsed = false,
   canCreate = true,
   canManage = true,
   onCloseMobile,
+  onToggleCollapsed,
   onCreate,
   onSelect,
   onRename,
@@ -249,6 +258,9 @@ export function SessionRail({
   const [deleteTarget, setDeleteTarget] = useState<SessionSummary | null>(null);
   const [closeTarget, setCloseTarget] = useState<SessionSummary | null>(null);
   const [busy, setBusy] = useState(false);
+  const compact = collapsed && !mobileOpen;
+  const collapseLabel = labels.collapse ?? (locale.startsWith("fa") ? "جمع‌کردن نوار کناری" : "Collapse sidebar");
+  const expandLabel = labels.expand ?? (locale.startsWith("fa") ? "بازکردن نوار کناری" : "Expand sidebar");
   const sessionStatusLabels = statusLabels(locale, labels);
   const remoteSearch = useSessionSearch({
     debounceMs: searchDebounceMs,
@@ -478,13 +490,26 @@ export function SessionRail({
   return (
     <>
       <aside
-        className={`session-rail ${mobileOpen ? "session-rail--mobile-open" : ""}`}
+        className={`session-rail ${mobileOpen ? "session-rail--mobile-open" : ""} ${compact ? "session-rail--collapsed" : ""}`}
         aria-label={labels.title}
         data-testid="session-list"
+        data-collapsed={compact ? "true" : "false"}
       >
         <header className="rail-header">
           <div className="rail-title-row">
-            <h2>{labels.title}</h2>
+            <h2 className={compact ? "sr-only" : undefined}>{labels.title}</h2>
+            {onToggleCollapsed ? (
+              <button
+                type="button"
+                className="icon-button rail-collapse-toggle"
+                aria-label={collapsed ? expandLabel : collapseLabel}
+                aria-pressed={collapsed}
+                data-testid="session-rail-toggle"
+                onClick={onToggleCollapsed}
+              >
+                {collapsed ? <PanelLeftOpen aria-hidden="true" size={18} /> : <PanelLeftClose aria-hidden="true" size={18} />}
+              </button>
+            ) : null}
             {onCloseMobile ? (
               <button
                 type="button"
@@ -498,30 +523,67 @@ export function SessionRail({
           </div>
           <button
             type="button"
-            className="button button--primary button--full"
+            className={compact ? "icon-button rail-new-compact" : "button button--primary button--full"}
             onClick={onCreate}
             data-testid="new-session"
             disabled={!canCreate}
+            aria-label={compact ? labels.newSession : undefined}
+            title={compact ? labels.newSession : undefined}
           >
             <MessageSquarePlus aria-hidden="true" size={18} />
-            {labels.newSession}
+            {compact ? null : labels.newSession}
           </button>
-          <label className="session-search">
-            <Search aria-hidden="true" size={17} />
-            <span className="sr-only">{labels.search}</span>
-            <input
-              value={query}
-              maxLength={MAX_SESSION_SEARCH_QUERY}
-              onChange={(event) => setQuery(event.target.value.slice(0, MAX_SESSION_SEARCH_QUERY))}
-              placeholder={labels.search}
-              data-testid="session-search"
-              dir="auto"
-            />
-          </label>
+          {compact ? null : (
+            <label className="session-search">
+              <Search aria-hidden="true" size={17} />
+              <span className="sr-only">{labels.search}</span>
+              <input
+                value={query}
+                maxLength={MAX_SESSION_SEARCH_QUERY}
+                onChange={(event) => setQuery(event.target.value.slice(0, MAX_SESSION_SEARCH_QUERY))}
+                placeholder={labels.search}
+                data-testid="session-search"
+                dir="auto"
+              />
+            </label>
+          )}
         </header>
 
         <div className="session-rail__list">
-          {loading ? (
+          {compact ? (
+            loading ? (
+              Array.from({ length: 5 }).map((_, index) => (
+                <div className="session-skeleton session-skeleton--compact" key={index} aria-hidden="true" />
+              ))
+            ) : sessions.length ? (
+              <div className="session-rail__compact-list">
+                {sessions.map((session) => {
+                  const active = session.storedId === activeSessionId;
+                  const indicator = sessionIndicator(session, sessionStatusLabels);
+                  return (
+                    <button
+                      key={session.storedId}
+                      type="button"
+                      className={`session-compact-button ${active ? "session-compact-button--active" : ""}`}
+                      aria-current={active ? "page" : undefined}
+                      aria-label={session.title}
+                      title={session.title}
+                      data-testid="session-item"
+                      data-session-id={session.storedId}
+                      onClick={() => onSelect(session)}
+                      disabled={!canManage}
+                    >
+                      {indicator ? <SessionStatusIndicator indicator={indicator} /> : <MessageSquare aria-hidden="true" size={16} />}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="rail-empty rail-empty--compact">
+                <Archive aria-hidden="true" size={18} />
+              </div>
+            )
+          ) : loading ? (
             Array.from({ length: 5 }).map((_, index) => (
               <div className="session-skeleton" key={index} aria-hidden="true" />
             ))

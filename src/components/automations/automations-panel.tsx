@@ -275,20 +275,18 @@ export function AutomationsPanel({
   const visibleJobs = jobsProfile === profile ? jobs : [];
 
   return (
-    <main className={cn("min-h-full bg-background px-4 py-6 sm:px-6 lg:px-8", className)} id="main-content">
-      <div className="mx-auto w-full max-w-6xl">
-        <header className="mb-6 flex flex-wrap items-start gap-4">
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
-              <CalendarClock aria-hidden="true" className="size-6 text-primary" />
-              <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">{t("title")}</h1>
-              {stale ? <Badge tone="warning">{t("stale")}</Badge> : null}
-            </div>
-            <p className="mt-2 max-w-3xl text-sm leading-7 text-muted-foreground">
-              {t("description")}
-            </p>
-          </div>
-          <Button disabled={loading || !available} onClick={() => void loadJobs()} variant="secondary">
+    <main className={cn("product-page min-h-full bg-background px-4 pb-8 sm:px-6", className)} id="main-content">
+      <div className="product-page-content mx-auto w-full max-w-[70rem]">
+        <header className="product-page-header flex min-h-12 items-center gap-3 border-b border-border">
+          <CalendarClock aria-hidden="true" className="size-5 shrink-0 text-primary" />
+          <h1 className="min-w-0 flex-1 truncate text-lg font-semibold tracking-tight">{t("title")}</h1>
+          {stale ? <Badge tone="warning">{t("stale")}</Badge> : null}
+          <Button
+            disabled={loading || !available}
+            onClick={() => void loadJobs()}
+            size="sm"
+            variant="secondary"
+          >
             {loading ? (
               <LoaderCircle aria-hidden="true" className="size-4 animate-spin motion-reduce:animate-none" />
             ) : (
@@ -298,16 +296,12 @@ export function AutomationsPanel({
           </Button>
         </header>
 
-        {!available ? (
-          <div className="rounded-2xl border border-dashed border-border bg-surface p-8 text-center">
-            <TriangleAlert aria-hidden="true" className="mx-auto size-8 text-muted-foreground" />
-            <h2 className="mt-3 font-semibold">{t("unavailableTitle")}</h2>
-            <p className="mt-1 text-sm text-muted-foreground">{t("unavailableDescription")}</p>
-          </div>
-        ) : null}
+        <div className="product-page-intro py-4">
+          <p className="max-w-3xl text-sm leading-6 text-muted-foreground">{t("description")}</p>
+        </div>
 
         {error ? (
-          <div className="mb-4 rounded-xl border border-destructive/25 bg-destructive/10 px-4 py-3 text-sm text-destructive" role="alert">
+          <div className="mb-4 rounded-lg border border-destructive/25 bg-destructive/10 px-4 py-3 text-sm text-destructive" role="alert">
             {error}
           </div>
         ) : null}
@@ -316,219 +310,242 @@ export function AutomationsPanel({
           {queuedJobId?.startsWith(`${profile}:`) ? t("queuedForScheduler") : ""}
         </div>
 
-        {available && (loading || jobsProfile !== profile) && visibleJobs.length === 0 ? (
-          <div className="grid gap-4 sm:grid-cols-2">
-            {[0, 1, 2, 3].map((item) => (
-              <div className="h-52 animate-pulse rounded-2xl border border-border bg-surface motion-reduce:animate-none" key={item} />
-            ))}
-          </div>
-        ) : null}
+        <div className="product-surface overflow-hidden rounded-xl border border-border bg-surface">
+          {!available ? (
+            <section className="flex items-start gap-3 px-4 py-6 sm:px-5">
+              <TriangleAlert aria-hidden="true" className="mt-0.5 size-5 shrink-0 text-muted-foreground" />
+              <div className="min-w-0">
+                <h2 className="text-sm font-semibold">{t("unavailableTitle")}</h2>
+                <p className="mt-1 text-sm text-muted-foreground">{t("unavailableDescription")}</p>
+              </div>
+            </section>
+          ) : null}
 
-        {available && !loading && jobsProfile === profile && visibleJobs.length === 0 ? (
-          <div className="rounded-2xl border border-dashed border-border bg-surface p-8 text-center">
-            <CalendarClock aria-hidden="true" className="mx-auto size-8 text-muted-foreground" />
-            <h2 className="mt-3 font-semibold">{t("emptyTitle")}</h2>
-            <p className="mt-1 text-sm text-muted-foreground">{t("emptyDescription")}</p>
-          </div>
-        ) : null}
+          {available && (loading || jobsProfile !== profile) && visibleJobs.length === 0 ? (
+            <div className="divide-y divide-border" aria-hidden="true">
+              {[0, 1, 2, 3].map((item) => (
+                <div
+                  className="h-24 animate-pulse bg-muted/35 motion-reduce:animate-none"
+                  key={item}
+                />
+              ))}
+            </div>
+          ) : null}
 
-        <div className="grid items-start gap-4 lg:grid-cols-2">
-          {visibleJobs.map((job) => {
+          {available && !loading && jobsProfile === profile && visibleJobs.length === 0 ? (
+            <section className="flex items-start gap-3 px-4 py-6 sm:px-5">
+              <CalendarClock aria-hidden="true" className="mt-0.5 size-5 shrink-0 text-muted-foreground" />
+              <div className="min-w-0">
+                <h2 className="text-sm font-semibold">{t("emptyTitle")}</h2>
+                <p className="mt-1 text-sm text-muted-foreground">{t("emptyDescription")}</p>
+              </div>
+            </section>
+          ) : null}
+
+          <div className="automation-list divide-y divide-border">
+            {visibleJobs.map((job) => {
             const scopeKey = `${profile}:${job.id}`;
             const isExpanded = expandedId === scopeKey;
             const jobDetails = details[scopeKey];
             const mutationsDisabled = !canMutate || stale;
             const runDisabled =
               mutationsDisabled || job.state === "paused" || job.state === "running" || queuedJobId === scopeKey;
-            return (
-              <article className="overflow-hidden rounded-2xl border border-border bg-surface shadow-surface" key={job.id}>
-                <div className="p-4 sm:p-5">
-                  <div className="flex flex-wrap items-start gap-3">
-                    <div className="min-w-0 flex-1">
-                      <BidiBlock as="h2" className="font-semibold text-foreground">
-                        {job.name}
-                      </BidiBlock>
-                      <TechnicalInline className="mt-1 block text-xs text-muted-foreground">
-                        {job.id}
-                      </TechnicalInline>
+              return (
+                <article className="automation-row min-w-0" key={job.id}>
+                  <div className="grid min-w-0 gap-4 p-4 sm:px-5 xl:grid-cols-[minmax(12rem,0.8fr)_minmax(0,1.45fr)_auto] xl:items-start">
+                    <div className="flex min-w-0 items-start gap-3">
+                      <span className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary">
+                        <CalendarClock aria-hidden="true" className="size-4" />
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <BidiBlock as="h2" className="text-sm font-semibold text-foreground">
+                          {job.name}
+                        </BidiBlock>
+                        <TechnicalInline className="mt-1 block truncate text-xs text-muted-foreground">
+                          {job.id}
+                        </TechnicalInline>
+                      </div>
+                      <JobStateBadge job={job} />
                     </div>
-                    <JobStateBadge job={job} />
-                  </div>
 
-                  <dl className="mt-4 grid grid-cols-2 gap-3 text-sm">
-                    <div>
-                      <dt className="text-xs text-muted-foreground">{t("schedule")}</dt>
-                      <dd className="mt-1"><TechnicalInline>{job.schedule}</TechnicalInline></dd>
-                    </div>
-                    <div>
-                      <dt className="text-xs text-muted-foreground">{t("nextRun")}</dt>
-                      <dd className="mt-1">{formatDate(job.nextRunAt, locale)}</dd>
-                    </div>
-                    <div>
-                      <dt className="text-xs text-muted-foreground">{t("lastRun")}</dt>
-                      <dd className="mt-1">{formatDate(job.lastRunAt, locale)}</dd>
-                    </div>
-                    <div>
-                      <dt className="text-xs text-muted-foreground">{t("delivery")}</dt>
-                      <dd className="mt-1"><BidiBlock>{job.delivery ?? "—"}</BidiBlock></dd>
-                    </div>
-                  </dl>
+                    <dl className="grid min-w-0 grid-cols-2 gap-x-5 gap-y-3 text-sm sm:grid-cols-4 xl:grid-cols-2">
+                      <div className="min-w-0">
+                        <dt className="text-xs text-muted-foreground">{t("schedule")}</dt>
+                        <dd className="mt-0.5 truncate"><TechnicalInline>{job.schedule}</TechnicalInline></dd>
+                      </div>
+                      <div className="min-w-0">
+                        <dt className="text-xs text-muted-foreground">{t("nextRun")}</dt>
+                        <dd className="mt-0.5 truncate">{formatDate(job.nextRunAt, locale)}</dd>
+                      </div>
+                      <div className="min-w-0">
+                        <dt className="text-xs text-muted-foreground">{t("lastRun")}</dt>
+                        <dd className="mt-0.5 truncate">{formatDate(job.lastRunAt, locale)}</dd>
+                      </div>
+                      <div className="min-w-0">
+                        <dt className="text-xs text-muted-foreground">{t("delivery")}</dt>
+                        <dd className="mt-0.5 truncate"><BidiBlock>{job.delivery ?? "—"}</BidiBlock></dd>
+                      </div>
+                    </dl>
 
-                  {job.lastError || job.lastDeliveryError ? (
-                    <div className="mt-4 rounded-xl border border-destructive/25 bg-destructive/10 p-3 text-sm text-destructive">
-                      <BidiBlock>{job.lastError ?? job.lastDeliveryError}</BidiBlock>
-                    </div>
-                  ) : null}
-
-                  {queuedJobId === scopeKey ? (
-                    <p className="mt-3 flex items-center gap-2 text-sm text-warning-foreground">
-                      <Clock3 aria-hidden="true" className="size-4" />
-                      {t("queuedForScheduler")}
-                    </p>
-                  ) : null}
-
-                  <div className="mt-5 flex flex-wrap gap-2">
-                    {job.state === "paused" ? (
-                      <Button
-                        disabled={mutationsDisabled}
-                        onClick={() => setPendingControl({action: "resume", job})}
-                        size="sm"
-                        variant="secondary"
-                      >
-                        <CirclePlay aria-hidden="true" className="size-4" />
-                        {t("resume")}
-                      </Button>
-                    ) : (
-                      <Button
-                        disabled={mutationsDisabled || job.state === "running"}
-                        onClick={() => setPendingControl({action: "pause", job})}
-                        size="sm"
-                        variant="secondary"
-                      >
-                        <CirclePause aria-hidden="true" className="size-4" />
-                        {t("pause")}
-                      </Button>
-                    )}
-                    <Button
-                      disabled={runDisabled}
-                      onClick={() => setPendingControl({action: "run", job})}
-                      size="sm"
-                    >
-                      <Play aria-hidden="true" className="size-4" />
-                      {t("run")}
-                    </Button>
-                    <Button
-                      aria-expanded={isExpanded}
-                      className="ms-auto"
-                      onClick={() => void loadDetails(job.id)}
-                      size="sm"
-                      variant="ghost"
-                    >
-                      {t("details")}
-                      {isExpanded ? (
-                        <ChevronUp aria-hidden="true" className="size-4" />
+                    <div className="flex flex-wrap items-center gap-2 xl:justify-end">
+                      {job.state === "paused" ? (
+                        <Button
+                          disabled={mutationsDisabled}
+                          onClick={() => setPendingControl({action: "resume", job})}
+                          size="sm"
+                          variant="secondary"
+                        >
+                          <CirclePlay aria-hidden="true" className="size-4" />
+                          {t("resume")}
+                        </Button>
                       ) : (
-                        <ChevronDown aria-hidden="true" className="size-4" />
+                        <Button
+                          disabled={mutationsDisabled || job.state === "running"}
+                          onClick={() => setPendingControl({action: "pause", job})}
+                          size="sm"
+                          variant="secondary"
+                        >
+                          <CirclePause aria-hidden="true" className="size-4" />
+                          {t("pause")}
+                        </Button>
                       )}
-                    </Button>
-                  </div>
-                  {!canMutate ? (
-                    <p className="mt-3 text-xs text-muted-foreground">{t("readOnly")}</p>
-                  ) : null}
-                </div>
+                      <Button
+                        disabled={runDisabled}
+                        onClick={() => setPendingControl({action: "run", job})}
+                        size="sm"
+                      >
+                        <Play aria-hidden="true" className="size-4" />
+                        {t("run")}
+                      </Button>
+                      <Button
+                        aria-controls={`automation-details-${job.id}`}
+                        aria-expanded={isExpanded}
+                        onClick={() => void loadDetails(job.id)}
+                        size="sm"
+                        variant="ghost"
+                      >
+                        {t("details")}
+                        {isExpanded ? (
+                          <ChevronUp aria-hidden="true" className="size-4" />
+                        ) : (
+                          <ChevronDown aria-hidden="true" className="size-4" />
+                        )}
+                      </Button>
+                    </div>
 
-                {isExpanded ? (
-                  <div className="border-t border-border bg-background/40 p-4 sm:p-5">
-                    {jobDetails?.loading ? (
-                      <p className="flex items-center gap-2 text-sm text-muted-foreground">
-                        <LoaderCircle aria-hidden="true" className="size-4 animate-spin motion-reduce:animate-none" />
-                        {t("loadingDetails")}
+                    {job.lastError || job.lastDeliveryError ? (
+                      <div className="rounded-lg border border-destructive/25 bg-destructive/10 p-3 text-sm text-destructive xl:col-span-3">
+                        <BidiBlock>{job.lastError ?? job.lastDeliveryError}</BidiBlock>
+                      </div>
+                    ) : null}
+
+                    {queuedJobId === scopeKey ? (
+                      <p className="flex items-center gap-2 text-sm text-warning-foreground xl:col-span-2">
+                        <Clock3 aria-hidden="true" className="size-4" />
+                        {t("queuedForScheduler")}
                       </p>
-                    ) : (
-                      <div className="grid gap-5">
-                        <section>
-                          <h3 className="text-sm font-semibold">{t("recentRuns")}</h3>
-                          {jobDetails?.runs.length ? (
-                            <ol className="mt-3 grid gap-2">
-                              {jobDetails.runs.map((run) => (
-                                <li className="rounded-lg border border-border bg-surface p-3 text-sm" key={run.id}>
-                                  <div className="flex flex-wrap items-center gap-2">
-                                    <TechnicalInline className="min-w-0 flex-1 truncate">{run.id}</TechnicalInline>
-                                    <Badge>{run.status}</Badge>
-                                  </div>
-                                  {run.summary ? <BidiBlock className="mt-2">{run.summary}</BidiBlock> : null}
-                                  {run.error ? <BidiBlock className="mt-2 text-destructive">{run.error}</BidiBlock> : null}
-                                  {run.sessionId && onOpenSession ? (
-                                    <Button
-                                      className="mt-2"
-                                      onClick={() => onOpenSession(profile, run.sessionId!)}
-                                      size="sm"
-                                      variant="ghost"
-                                    >
-                                      <ExternalLink aria-hidden="true" className="size-4" />
-                                      {t("openRunSession")}
-                                    </Button>
-                                  ) : null}
-                                </li>
-                              ))}
-                            </ol>
-                          ) : (
-                            <p className="mt-2 text-sm text-muted-foreground">{t("noRuns")}</p>
-                          )}
-                        </section>
+                    ) : null}
+                    {!canMutate ? (
+                      <p className="text-xs text-muted-foreground xl:col-span-3">{t("readOnly")}</p>
+                    ) : null}
+                  </div>
 
-                        <section>
-                          <h3 className="text-sm font-semibold">{t("savedOutputs")}</h3>
-                          {jobDetails?.outputs.length ? (
-                            <ol className="mt-3 grid gap-2">
-                              {jobDetails.outputs.map((output) => {
-                                const downloadUrl = safeDownloadUrl(output.downloadUrl);
-                                return (
-                                  <li className="rounded-lg border border-border bg-surface p-3 text-sm" key={output.id}>
+                  {isExpanded ? (
+                    <div
+                      className="automation-details border-t border-border bg-background/30 p-4 sm:px-5"
+                      id={`automation-details-${job.id}`}
+                    >
+                      {jobDetails?.loading ? (
+                        <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                          <LoaderCircle aria-hidden="true" className="size-4 animate-spin motion-reduce:animate-none" />
+                          {t("loadingDetails")}
+                        </p>
+                      ) : (
+                        <div className="grid gap-6 lg:grid-cols-2">
+                          <section className="min-w-0">
+                            <h3 className="text-sm font-semibold">{t("recentRuns")}</h3>
+                            {jobDetails?.runs.length ? (
+                              <ol className="mt-2 divide-y divide-border border-y border-border">
+                                {jobDetails.runs.map((run) => (
+                                  <li className="py-3 text-sm" key={run.id}>
                                     <div className="flex flex-wrap items-center gap-2">
-                                      <FileText aria-hidden="true" className="size-4 text-primary" />
-                                      <BidiBlock className="min-w-0 flex-1 font-medium">{output.name}</BidiBlock>
-                                      {downloadUrl ? (
-                                        <a className="text-xs font-medium text-primary hover:underline" href={downloadUrl}>
-                                          {t("download")}
-                                        </a>
-                                      ) : null}
+                                      <TechnicalInline className="min-w-0 flex-1 truncate">{run.id}</TechnicalInline>
+                                      <Badge>{run.status}</Badge>
                                     </div>
-                                    {output.markdown ? (
-                                      <BidiBlock className="mt-2 max-h-48 overflow-y-auto whitespace-pre-wrap rounded-lg bg-muted/50 p-2 text-xs">
-                                        {output.markdown}
-                                      </BidiBlock>
-                                    ) : (
+                                    {run.summary ? <BidiBlock className="mt-2">{run.summary}</BidiBlock> : null}
+                                    {run.error ? <BidiBlock className="mt-2 text-destructive">{run.error}</BidiBlock> : null}
+                                    {run.sessionId && onOpenSession ? (
                                       <Button
                                         className="mt-2"
-                                        disabled={Boolean(outputLoadingKey)}
-                                        onClick={() => void loadOutput(job.id, output.id)}
+                                        onClick={() => onOpenSession(profile, run.sessionId!)}
                                         size="sm"
                                         variant="ghost"
                                       >
-                                        {outputLoadingKey === `${profile}:${job.id}:${output.id}` ? (
-                                          <LoaderCircle aria-hidden="true" className="size-4 animate-spin motion-reduce:animate-none" />
-                                        ) : (
-                                          <FileText aria-hidden="true" className="size-4" />
-                                        )}
-                                        {t("viewOutput")}
+                                        <ExternalLink aria-hidden="true" className="size-4" />
+                                        {t("openRunSession")}
                                       </Button>
-                                    )}
+                                    ) : null}
                                   </li>
-                                );
-                              })}
-                            </ol>
-                          ) : (
-                            <p className="mt-2 text-sm text-muted-foreground">{t("noOutputs")}</p>
-                          )}
-                        </section>
-                      </div>
-                    )}
-                  </div>
-                ) : null}
-              </article>
-            );
-          })}
+                                ))}
+                              </ol>
+                            ) : (
+                              <p className="mt-2 text-sm text-muted-foreground">{t("noRuns")}</p>
+                            )}
+                          </section>
+
+                          <section className="min-w-0">
+                            <h3 className="text-sm font-semibold">{t("savedOutputs")}</h3>
+                            {jobDetails?.outputs.length ? (
+                              <ol className="mt-2 divide-y divide-border border-y border-border">
+                                {jobDetails.outputs.map((output) => {
+                                  const downloadUrl = safeDownloadUrl(output.downloadUrl);
+                                  return (
+                                    <li className="py-3 text-sm" key={output.id}>
+                                      <div className="flex flex-wrap items-center gap-2">
+                                        <FileText aria-hidden="true" className="size-4 text-primary" />
+                                        <BidiBlock className="min-w-0 flex-1 font-medium">{output.name}</BidiBlock>
+                                        {downloadUrl ? (
+                                          <a className="text-xs font-medium text-primary hover:underline" href={downloadUrl}>
+                                            {t("download")}
+                                          </a>
+                                        ) : null}
+                                      </div>
+                                      {output.markdown ? (
+                                        <BidiBlock className="mt-2 max-h-48 overflow-y-auto whitespace-pre-wrap rounded-lg bg-muted/45 p-2 text-xs">
+                                          {output.markdown}
+                                        </BidiBlock>
+                                      ) : (
+                                        <Button
+                                          className="mt-2"
+                                          disabled={Boolean(outputLoadingKey)}
+                                          onClick={() => void loadOutput(job.id, output.id)}
+                                          size="sm"
+                                          variant="ghost"
+                                        >
+                                          {outputLoadingKey === `${profile}:${job.id}:${output.id}` ? (
+                                            <LoaderCircle aria-hidden="true" className="size-4 animate-spin motion-reduce:animate-none" />
+                                          ) : (
+                                            <FileText aria-hidden="true" className="size-4" />
+                                          )}
+                                          {t("viewOutput")}
+                                        </Button>
+                                      )}
+                                    </li>
+                                  );
+                                })}
+                              </ol>
+                            ) : (
+                              <p className="mt-2 text-sm text-muted-foreground">{t("noOutputs")}</p>
+                            )}
+                          </section>
+                        </div>
+                      )}
+                    </div>
+                  ) : null}
+                </article>
+              );
+            })}
+          </div>
         </div>
       </div>
 

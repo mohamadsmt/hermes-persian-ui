@@ -17,7 +17,16 @@
     "openWorkspace": "بازکردن فضای کار",
     "closePanel": "بستن پنل",
     "collapseSidebar": "جمع‌کردن نوار کناری",
-    "expandSidebar": "بازکردن نوار کناری"
+    "expandSidebar": "بازکردن نوار کناری",
+    "openNavigation": "بازکردن راهبری",
+    "closeNavigation": "بستن راهبری",
+    "navigationMenu": "راهبری",
+    "openInspector": "بازکردن پنل جزئیات",
+    "closeInspector": "بستن پنل جزئیات",
+    "pinInspector": "سنجاق‌کردن پنل جزئیات",
+    "unpinInspector": "برداشتن سنجاق پنل جزئیات",
+    "openModelSettings": "بازکردن تنظیمات مدل",
+    "moreActions": "کنش‌های بیشتر"
   },
   "Sessions": {
     "title": "گفت‌وگوها",

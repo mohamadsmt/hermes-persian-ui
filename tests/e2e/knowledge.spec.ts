@@ -23,6 +23,7 @@ test("keeps a long LTR learning label inside its RTL timeline row", async ({app,
   });
 
   await app.open("fa");
+  await app.openWorkspaceNavigation();
   await page.getByRole("link", {name: "دانش"}).click();
 
   const row = page.getByTestId("knowledge-timeline-row");
